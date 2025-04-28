@@ -1,0 +1,298 @@
+{
+  "version": "1.0",
+  "last_updated": "2023-11-15",
+  "categories": {
+    "hooks": [
+      {
+        "phrase": "Lo que nadie te dice sobre...",
+        "engagement_score": 0.92,
+        "platforms": ["TikTok", "YouTube", "Instagram"],
+        "character_compatibility": ["finance_expert", "tech_reviewer", "fitness_coach"]
+      },
+      {
+        "phrase": "El secreto que la industria no quiere que sepas...",
+        "engagement_score": 0.90,
+        "platforms": ["TikTok", "YouTube", "Instagram"],
+        "character_compatibility": ["finance_expert", "tech_reviewer"]
+      },
+      {
+        "phrase": "POV: Cuando descubres que...",
+        "engagement_score": 0.89,
+        "platforms": ["TikTok", "Instagram"],
+        "character_compatibility": ["comedy_creator", "gaming_streamer"]
+      },
+      {
+        "phrase": "Esto cambiará tu forma de...",
+        "engagement_score": 0.88,
+        "platforms": ["all"],
+        "character_compatibility": ["all"]
+      },
+      {
+        "phrase": "3 cosas que deberías saber antes de...",
+        "engagement_score": 0.87,
+        "platforms": ["all"],
+        "character_compatibility": ["all"]
+      }
+    ],
+    "transitions": [
+      {
+        "phrase": "Pero espera, eso no es todo...",
+        "engagement_score": 0.85,
+        "platforms": ["all"],
+        "character_compatibility": ["all"]
+      },
+      {
+        "phrase": "Y aquí viene lo más importante...",
+        "engagement_score": 0.84,
+        "platforms": ["all"],
+        "character_compatibility": ["all"]
+      },
+      {
+        "phrase": "Lo que descubrí después fue aún más sorprendente...",
+        "engagement_score": 0.86,
+        "platforms": ["all"],
+        "character_compatibility": ["all"]
+      },
+      {
+        "phrase": "Ahora, déjame mostrarte el verdadero truco...",
+        "engagement_score": 0.83,
+        "platforms": ["all"],
+        "character_compatibility": ["all"]
+      }
+    ],
+    "calls_to_action": [
+      {
+        "phrase": "Si quieres más contenido como este, sigue y activa las notificaciones",
+        "engagement_score": 0.82,
+        "platforms": ["all"],
+        "character_compatibility": ["all"]
+      },
+      {
+        "phrase": "Comenta '¡INFO!' para recibir más detalles",
+        "engagement_score": 0.88,
+        "platforms": ["TikTok", "Instagram"],
+        "character_compatibility": ["all"]
+      },
+      {
+        "phrase": "Etiqueta a alguien que necesita ver esto",
+        "engagement_score": 0.85,
+        "platforms": ["TikTok", "Instagram"],
+        "character_compatibility": ["all"]
+      },
+      {
+        "phrase": "¿Estás de acuerdo? Deja tu opinión abajo",
+        "engagement_score": 0.83,
+        "platforms": ["all"],
+        "character_compatibility": ["all"]
+      }
+    ],
+    "character_specific": {
+      "finance_expert": [
+        {
+          "phrase": "El dinero inteligente está moviéndose hacia...",
+          "engagement_score": 0.89,
+          "platforms": ["all"],
+          "context": "hooks"
+        },
+        {
+          "phrase": "Este es el error financiero número uno que comete el 90% de las personas...",
+          "engagement_score": 0.91,
+          "platforms": ["all"],
+          "context": "hooks"
+        },
+        {
+          "phrase": "Analicemos los números y veamos qué nos dicen realmente...",
+          "engagement_score": 0.86,
+          "platforms": ["all"],
+          "context": "transitions"
+        },
+        {
+          "phrase": "Esta estrategia podría transformar tu situación financiera en los próximos 30 días",
+          "engagement_score": 0.88,
+          "platforms": ["all"],
+          "context": "calls_to_action"
+        }
+      ],
+      "fitness_coach": [
+        {
+          "phrase": "Este ejercicio de 5 minutos reemplaza 1 hora de cardio...",
+          "engagement_score": 0.92,
+          "platforms": ["all"],
+          "context": "hooks"
+        },
+        {
+          "phrase": "El mayor obstáculo para tu transformación física no es lo que piensas...",
+          "engagement_score": 0.90,
+          "platforms": ["all"],
+          "context": "hooks"
+        },
+        {
+          "phrase": "Ahora, activa estos músculos específicos para maximizar resultados...",
+          "engagement_score": 0.87,
+          "platforms": ["all"],
+          "context": "transitions"
+        },
+        {
+          "phrase": "Únete a mi reto de 30 días y transforma tu cuerpo desde casa",
+          "engagement_score": 0.89,
+          "platforms": ["all"],
+          "context": "calls_to_action"
+        }
+      ],
+      "tech_reviewer": [
+        {
+          "phrase": "Esta función oculta cambia completamente cómo usarás tu dispositivo...",
+          "engagement_score": 0.90,
+          "platforms": ["all"],
+          "context": "hooks"
+        },
+        {
+          "phrase": "Después de probar cientos de productos, este es el único que recomendaría...",
+          "engagement_score": 0.88,
+          "platforms": ["all"],
+          "context": "hooks"
+        },
+        {
+          "phrase": "Pero cuando analizamos el rendimiento bajo presión, es donde realmente brilla...",
+          "engagement_score": 0.85,
+          "platforms": ["all"],
+          "context": "transitions"
+        },
+        {
+          "phrase": "Revisa mi guía completa con todas las configuraciones optimizadas en el link de mi bio",
+          "engagement_score": 0.86,
+          "platforms": ["all"],
+          "context": "calls_to_action"
+        }
+      ],
+      "gaming_streamer": [
+        {
+          "phrase": "Este movimiento te dará ventaja sobre el 99% de los jugadores...",
+          "engagement_score": 0.93,
+          "platforms": ["all"],
+          "context": "hooks"
+        },
+        {
+          "phrase": "La configuración secreta que usan los pros y nadie comparte...",
+          "engagement_score": 0.91,
+          "platforms": ["all"],
+          "context": "hooks"
+        },
+        {
+          "phrase": "Observa cuidadosamente esta secuencia de teclas...",
+          "engagement_score": 0.87,
+          "platforms": ["all"],
+          "context": "transitions"
+        },
+        {
+          "phrase": "Únete a mi Discord para sesiones de entrenamiento y torneos exclusivos",
+          "engagement_score": 0.89,
+          "platforms": ["all"],
+          "context": "calls_to_action"
+        }
+      ],
+      "comedy_creator": [
+        {
+          "phrase": "Cuando intentas parecer profesional pero la vida tiene otros planes...",
+          "engagement_score": 0.94,
+          "platforms": ["all"],
+          "context": "hooks"
+        },
+        {
+          "phrase": "Nadie me advirtió sobre esto antes de...",
+          "engagement_score": 0.92,
+          "platforms": ["all"],
+          "context": "hooks"
+        },
+        {
+          "phrase": "Y justo cuando pensaba que no podía empeorar...",
+          "engagement_score": 0.93,
+          "platforms": ["all"],
+          "context": "transitions"
+        },
+        {
+          "phrase": "Si te has sentido identificado, este es tu signo para seguirme y unirte al caos diario",
+          "engagement_score": 0.90,
+          "platforms": ["all"],
+          "context": "calls_to_action"
+        }
+      ]
+    },
+    "trending_phrases": [
+      {
+        "phrase": "No sabía que necesitaba esto hasta ahora",
+        "engagement_score": 0.91,
+        "platforms": ["TikTok", "Instagram"],
+        "trend_start_date": "2023-09-01",
+        "estimated_duration_days": 60,
+        "character_compatibility": ["all"]
+      },
+      {
+        "phrase": "Esto es tu señal para...",
+        "engagement_score": 0.89,
+        "platforms": ["TikTok", "Instagram"],
+        "trend_start_date": "2023-08-15",
+        "estimated_duration_days": 90,
+        "character_compatibility": ["all"]
+      },
+      {
+        "phrase": "El algoritmo me ha bendecido",
+        "engagement_score": 0.87,
+        "platforms": ["TikTok"],
+        "trend_start_date": "2023-10-01",
+        "estimated_duration_days": 45,
+        "character_compatibility": ["all"]
+      },
+      {
+        "phrase": "Cosas que deberían ser normalizadas...",
+        "engagement_score": 0.90,
+        "platforms": ["TikTok", "Instagram"],
+        "trend_start_date": "2023-07-01",
+        "estimated_duration_days": 120,
+        "character_compatibility": ["all"]
+      },
+      {
+        "phrase": "Lo que nadie te dice sobre ser adulto...",
+        "engagement_score": 0.88,
+        "platforms": ["TikTok", "Instagram", "YouTube"],
+        "trend_start_date": "2023-06-15",
+        "estimated_duration_days": 150,
+        "character_compatibility": ["comedy_creator", "finance_expert"]
+      }
+    ],
+    "seasonal_phrases": [
+      {
+        "phrase": "Prepárate para las fiestas con estos consejos...",
+        "engagement_score": 0.86,
+        "platforms": ["all"],
+        "season": "holiday",
+        "months": [11, 12],
+        "character_compatibility": ["all"]
+      },
+      {
+        "phrase": "Empieza el año con el pie derecho...",
+        "engagement_score": 0.88,
+        "platforms": ["all"],
+        "season": "new_year",
+        "months": [12, 1],
+        "character_compatibility": ["all"]
+      },
+      {
+        "phrase": "Prepara tu cuerpo para el verano con...",
+        "engagement_score": 0.89,
+        "platforms": ["all"],
+        "season": "summer",
+        "months": [4, 5, 6],
+        "character_compatibility": ["fitness_coach"]
+      },
+      {
+        "phrase": "Vuelta al cole: lo que necesitas saber...",
+        "engagement_score": 0.85,
+        "platforms": ["all"],
+        "season": "back_to_school",
+        "months": [8, 9],
+        "character_compatibility": ["all"]
+      }
+    ]
+  }
+}

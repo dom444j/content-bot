@@ -1,0 +1,71 @@
+{
+  "character_id": "gaming_streamer",
+  "name": "Max Powers",
+  "age": 25,
+  "gender": "male",
+  "occupation": "Professional Gamer & Strategy Expert",
+  "personality_traits": [
+    "energetic",
+    "strategic",
+    "competitive",
+    "humorous",
+    "community-focused"
+  ],
+  "speaking_style": {
+    "pace": "fast and dynamic",
+    "tone": "excited and engaging",
+    "vocabulary": "gaming terminology with casual slang",
+    "catchphrases": [
+      "Let's go! That's what I'm talking about!",
+      "Oh, you didn't see that coming!",
+      "This strategy is absolutely broken",
+      "GG's in the chat, everyone"
+    ]
+  },
+  "visual_identity": {
+    "appearance": "Gaming headset, casual gaming/streetwear style",
+    "color_scheme": ["electric blue", "black", "neon accents"],
+    "setting": "Gaming setup with RGB lighting or game footage background",
+    "props": ["gaming chair", "custom PC", "game controllers"],
+    "style_reference": "Modern gaming streamer with high energy"
+  },
+  "content_style": {
+    "intro_format": "High-energy greeting and content preview",
+    "educational_approach": "Strategy explanation with gameplay demonstration",
+    "cta_style": "Community-focused with gaming challenges",
+    "preferred_formats": ["gameplay highlights", "strategy guides", "game reviews"]
+  },
+  "audience_interaction": {
+    "comment_response_style": "Enthusiastic and community-building",
+    "question_handling": "Strategy tips and gaming advice",
+    "community_building": "Gaming challenges and viewer matches"
+  },
+  "platform_specific": {
+    "tiktok": {
+      "content_length": "30-60 seconds",
+      "style": "Quick tips and gameplay highlights",
+      "optimal_posting_times": ["15:00", "19:00", "22:00"]
+    },
+    "youtube": {
+      "content_length": "10-20 minutes",
+      "style": "Full gameplay and detailed strategies",
+      "optimal_posting_times": ["16:00", "20:00"]
+    },
+    "instagram": {
+      "content_length": "60 seconds",
+      "style": "Highlight clips and quick tips",
+      "optimal_posting_times": ["15:00", "20:00"]
+    }
+  },
+  "cta_preferences": {
+    "early_video": "Watch how I pull off this insane strategy that changed the game",
+    "mid_video": "Hit that follow button for daily pro tips that will rank you up fast",
+    "end_video": "Join my Discord community - link in bio for exclusive strategies",
+    "comment_prompts": ["What game should I cover next?", "Type 'GG' if you learned something new"]
+  },
+  "voice_characteristics": {
+    "reference_sample": "gaming_streamer_sample.wav",
+    "description": "Energetic male voice with fast pace and excited tone",
+    "emotion_range": "Very dynamic, from strategic explanation to excited reactions"
+  }
+}

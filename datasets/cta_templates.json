@@ -1,0 +1,344 @@
+{
+  "version": "1.0",
+  "last_updated": "2023-11-15",
+  "categories": {
+    "early_video": {
+      "attention_grabbers": [
+        {
+          "template": "Quédate hasta el final para descubrir {benefit}",
+          "variables": {
+            "benefit": ["el secreto", "la estrategia", "el truco", "la técnica", "el método"]
+          },
+          "engagement_score": 0.85,
+          "platforms": ["TikTok", "YouTube", "Instagram"],
+          "character_compatibility": ["all"]
+        },
+        {
+          "template": "No vas a creer lo que pasa cuando {action}",
+          "variables": {
+            "action": ["haces esto", "pruebas este método", "aplicas esta técnica", "sigues estos pasos"]
+          },
+          "engagement_score": 0.82,
+          "platforms": ["TikTok", "Instagram"],
+          "character_compatibility": ["all"]
+        },
+        {
+          "template": "Te voy a mostrar cómo {achievement} en solo {timeframe}",
+          "variables": {
+            "achievement": ["duplicar tus ganancias", "mejorar tu condición física", "dominar esta habilidad", "resolver este problema"],
+            "timeframe": ["una semana", "30 días", "tiempo récord", "minutos"]
+          },
+          "engagement_score": 0.80,
+          "platforms": ["YouTube", "TikTok"],
+          "character_compatibility": ["finance_expert", "fitness_coach", "tech_reviewer"]
+        }
+      ],
+      "character_specific": {
+        "finance_expert": [
+          {
+            "template": "Este es el movimiento financiero que {audience} están ignorando ahora mismo",
+            "variables": {
+              "audience": ["los expertos", "los bancos", "Wall Street", "los inversores principiantes"]
+            },
+            "engagement_score": 0.88,
+            "platforms": ["all"]
+          },
+          {
+            "template": "La estrategia que me permitió {achievement} en plena crisis",
+            "variables": {
+              "achievement": ["duplicar mi portafolio", "generar ingresos pasivos", "proteger mis ahorros", "invertir con éxito"]
+            },
+            "engagement_score": 0.85,
+            "platforms": ["all"]
+          }
+        ],
+        "fitness_coach": [
+          {
+            "template": "Este ejercicio de {timeframe} minutos {benefit} más que una hora en el gimnasio",
+            "variables": {
+              "timeframe": ["5", "10", "15"],
+              "benefit": ["quema calorías", "tonifica", "fortalece", "activa tu metabolismo"]
+            },
+            "engagement_score": 0.90,
+            "platforms": ["all"]
+          },
+          {
+            "template": "El error número uno que está saboteando tu {goal}",
+            "variables": {
+              "goal": ["pérdida de peso", "ganancia muscular", "progreso fitness", "transformación física"]
+            },
+            "engagement_score": 0.87,
+            "platforms": ["all"]
+          }
+        ],
+        "tech_reviewer": [
+          {
+            "template": "Descubrí una función oculta en {product} que nadie está usando",
+            "variables": {
+              "product": ["este nuevo smartphone", "esta app", "este dispositivo", "esta actualización"]
+            },
+            "engagement_score": 0.86,
+            "platforms": ["all"]
+          },
+          {
+            "template": "¿Vale la pena gastar en {product}? La verdad te sorprenderá",
+            "variables": {
+              "product": ["el último iPhone", "este gadget viral", "esta tecnología", "esta suscripción premium"]
+            },
+            "engagement_score": 0.84,
+            "platforms": ["all"]
+          }
+        ],
+        "gaming_streamer": [
+          {
+            "template": "La estrategia que los pros están usando para {achievement} en {game}",
+            "variables": {
+              "achievement": ["dominar", "ganar cada partida", "subir de rango", "conseguir más kills"],
+              "game": ["Fortnite", "Valorant", "Minecraft", "League of Legends"]
+            },
+            "engagement_score": 0.89,
+            "platforms": ["all"]
+          },
+          {
+            "template": "Este truco de {game} está completamente roto y pronto lo van a parchear",
+            "variables": {
+              "game": ["Fortnite", "Valorant", "Minecraft", "League of Legends", "Call of Duty"]
+            },
+            "engagement_score": 0.91,
+            "platforms": ["all"]
+          }
+        ],
+        "comedy_creator": [
+          {
+            "template": "Cuando intentas {relatable_situation} pero {unexpected_outcome}",
+            "variables": {
+              "relatable_situation": ["impresionar a alguien", "parecer profesional", "actuar con normalidad", "fingir que sabes lo que haces"],
+              "unexpected_outcome": ["todo sale mal", "la realidad te golpea", "el universo tiene otros planes", "el desastre es inevitable"]
+            },
+            "engagement_score": 0.92,
+            "platforms": ["all"]
+          },
+          {
+            "template": "POV: Eres {character} cuando {situation}",
+            "variables": {
+              "character": ["tu madre", "tu jefe", "ese amigo dramático", "el camarero"],
+              "situation": ["te pide un favor", "descubre tu secreto", "te ve después de años", "tiene que darte malas noticias"]
+            },
+            "engagement_score": 0.90,
+            "platforms": ["TikTok", "Instagram"]
+          }
+        ]
+      }
+    },
+    "mid_video": {
+      "retention_hooks": [
+        {
+          "template": "Pero espera, ahora viene lo mejor...",
+          "variables": {},
+          "engagement_score": 0.83,
+          "platforms": ["all"],
+          "character_compatibility": ["all"]
+        },
+        {
+          "template": "Lo que voy a mostrar ahora cambió completamente mi {aspect}",
+          "variables": {
+            "aspect": ["estrategia", "resultados", "perspectiva", "enfoque"]
+          },
+          "engagement_score": 0.81,
+          "platforms": ["all"],
+          "character_compatibility": ["all"]
+        },
+        {
+          "template": "Si te gusta este contenido, dale like y sigue para más {content_type}",
+          "variables": {
+            "content_type": ["consejos", "tutoriales", "estrategias", "trucos", "revelaciones"]
+          },
+          "engagement_score": 0.78,
+          "platforms": ["all"],
+          "character_compatibility": ["all"]
+        }
+      ],
+      "gamification": [
+        {
+          "template": "Comenta '{emoji}' si quieres que haga la parte 2",
+          "variables": {
+            "emoji": ["🔥", "👍", "💯", "⚡", "🚀"]
+          },
+          "engagement_score": 0.89,
+          "platforms": ["TikTok", "Instagram", "YouTube"],
+          "character_compatibility": ["all"]
+        },
+        {
+          "template": "¿Puedes adivinar qué pasará después? Deja tu predicción en los comentarios",
+          "variables": {},
+          "engagement_score": 0.85,
+          "platforms": ["all"],
+          "character_compatibility": ["all"]
+        },
+        {
+          "template": "Etiqueta a un amigo que necesita ver esto",
+          "variables": {},
+          "engagement_score": 0.82,
+          "platforms": ["TikTok", "Instagram"],
+          "character_compatibility": ["all"]
+        }
+      ],
+      "character_specific": {
+        "finance_expert": [
+          {
+            "template": "Si aplicas esta estrategia correctamente, podrías {benefit} en los próximos {timeframe}",
+            "variables": {
+              "benefit": ["duplicar tu inversión", "generar ingresos pasivos", "proteger tu capital", "diversificar tu portafolio"],
+              "timeframe": ["meses", "30 días", "un año"]
+            },
+            "engagement_score": 0.86,
+            "platforms": ["all"]
+          }
+        ],
+        "fitness_coach": [
+          {
+            "template": "Sigue este plan durante {timeframe} días y notarás {benefit}",
+            "variables": {
+              "timeframe": ["7", "14", "21", "30"],
+              "benefit": ["más energía", "mejor definición", "mayor resistencia", "resultados visibles"]
+            },
+            "engagement_score": 0.88,
+            "platforms": ["all"]
+          }
+        ],
+        "tech_reviewer": [
+          {
+            "template": "Después de probar {product} durante {timeframe}, descubrí algo que los fabricantes no quieren que sepas",
+            "variables": {
+              "product": ["este dispositivo", "esta aplicación", "este servicio", "esta tecnología"],
+              "timeframe": ["una semana", "un mes", "varios meses"]
+            },
+            "engagement_score": 0.85,
+            "platforms": ["all"]
+          }
+        ],
+        "gaming_streamer": [
+          {
+            "template": "Este movimiento te dará ventaja contra el {percentage}% de los jugadores",
+            "variables": {
+              "percentage": ["90", "95", "99"]
+            },
+            "engagement_score": 0.87,
+            "platforms": ["all"]
+          }
+        ],
+        "comedy_creator": [
+          {
+            "template": "Y justo cuando pensaba que no podía empeorar...",
+            "variables": {},
+            "engagement_score": 0.89,
+            "platforms": ["all"]
+          }
+        ]
+      }
+    },
+    "end_video": {
+      "conversion_drivers": [
+        {
+          "template": "Link en bio para {offer}",
+          "variables": {
+            "offer": ["más información", "el tutorial completo", "la guía paso a paso", "recursos gratuitos"]
+          },
+          "engagement_score": 0.80,
+          "platforms": ["TikTok", "Instagram"],
+          "character_compatibility": ["all"]
+        },
+        {
+          "template": "Suscríbete para más {content_type} como este",
+          "variables": {
+            "content_type": ["consejos", "tutoriales", "estrategias", "contenido", "revelaciones"]
+          },
+          "engagement_score": 0.77,
+          "platforms": ["YouTube"],
+          "character_compatibility": ["all"]
+        },
+        {
+          "template": "¿Te ha gustado? Compártelo con alguien que necesite verlo",
+          "variables": {},
+          "engagement_score": 0.75,
+          "platforms": ["all"],
+          "character_compatibility": ["all"]
+        }
+      ],
+      "character_specific": {
+        "finance_expert": [
+          {
+            "template": "Descarga mi guía gratuita sobre {topic} en el link de mi bio",
+            "variables": {
+              "topic": ["inversión en criptomonedas", "ahorro inteligente", "libertad financiera", "inversión para principiantes"]
+            },
+            "engagement_score": 0.84,
+            "platforms": ["all"]
+          }
+        ],
+        "fitness_coach": [
+          {
+            "template": "Únete a mi reto de {timeframe} días en el link de mi bio",
+            "variables": {
+              "timeframe": ["7", "14", "21", "30"]
+            },
+            "engagement_score": 0.86,
+            "platforms": ["all"]
+          }
+        ],
+        "tech_reviewer": [
+          {
+            "template": "Revisa mi lista de recomendaciones de {category} en el link de mi bio",
+            "variables": {
+              "category": ["tecnología", "apps esenciales", "gadgets", "herramientas de productividad"]
+            },
+            "engagement_score": 0.83,
+            "platforms": ["all"]
+          }
+        ],
+        "gaming_streamer": [
+          {
+            "template": "Únete a mi Discord para sesiones de juego en vivo y más consejos exclusivos",
+            "variables": {},
+            "engagement_score": 0.85,
+            "platforms": ["all"]
+          }
+        ],
+        "comedy_creator": [
+          {
+            "template": "Más desastres como este en mi perfil. ¡Sígueme para reírte a diario!",
+            "variables": {},
+            "engagement_score": 0.87,
+            "platforms": ["all"]
+          }
+        ]
+      }
+    }
+  },
+  "platform_specific": {
+    "TikTok": {
+      "optimal_timing": {
+        "early_video": "0-3 segundos",
+        "mid_video": "5-8 segundos",
+        "end_video": "últimos 2 segundos"
+      },
+      "recommended_templates": ["gamification", "attention_grabbers"]
+    },
+    "Instagram": {
+      "optimal_timing": {
+        "early_video": "0-5 segundos",
+        "mid_video": "10-15 segundos",
+        "end_video": "últimos 3 segundos"
+      },
+      "recommended_templates": ["gamification", "conversion_drivers"]
+    },
+    "YouTube": {
+      "optimal_timing": {
+        "early_video": "0-15 segundos",
+        "mid_video": "30-60 segundos",
+        "end_video": "últimos 20 segundos"
+      },
+      "recommended_templates": ["retention_hooks", "conversion_drivers"]
+    }
+  }
+}

@@ -1,0 +1,71 @@
+{
+  "character_id": "finance_expert",
+  "name": "Alex Morgan",
+  "age": 32,
+  "gender": "male",
+  "occupation": "Financial Analyst & Crypto Investor",
+  "personality_traits": [
+    "analytical",
+    "confident",
+    "educational",
+    "straightforward",
+    "trustworthy"
+  ],
+  "speaking_style": {
+    "pace": "moderate",
+    "tone": "authoritative but approachable",
+    "vocabulary": "professional with simplified explanations",
+    "catchphrases": [
+      "Let's break down the numbers",
+      "Here's what most people miss",
+      "The smart money is moving toward",
+      "This strategy could change your financial future"
+    ]
+  },
+  "visual_identity": {
+    "appearance": "Professional but modern, usually in business casual attire",
+    "color_scheme": ["navy blue", "white", "gold accents"],
+    "setting": "Modern office or trading desk with financial charts",
+    "props": ["laptop", "financial charts", "cryptocurrency symbols"],
+    "style_reference": "Blend of professional and tech-savvy"
+  },
+  "content_style": {
+    "intro_format": "Direct question or shocking statistic",
+    "educational_approach": "Data-driven with practical examples",
+    "cta_style": "Value-focused with clear benefit",
+    "preferred_formats": ["explainer", "reaction to news", "strategy breakdown"]
+  },
+  "audience_interaction": {
+    "comment_response_style": "Helpful and detailed",
+    "question_handling": "Thorough explanations with examples",
+    "community_building": "Investment challenges and strategy sharing"
+  },
+  "platform_specific": {
+    "tiktok": {
+      "content_length": "30-60 seconds",
+      "style": "Quick tips and market updates",
+      "optimal_posting_times": ["12:00", "18:00", "21:00"]
+    },
+    "youtube": {
+      "content_length": "8-12 minutes",
+      "style": "Detailed analysis and strategy sessions",
+      "optimal_posting_times": ["16:00", "20:00"]
+    },
+    "instagram": {
+      "content_length": "60 seconds",
+      "style": "Visual explanations and quick insights",
+      "optimal_posting_times": ["12:00", "18:00"]
+    }
+  },
+  "cta_preferences": {
+    "early_video": "If you want to protect your money from inflation, keep watching",
+    "mid_video": "Follow for daily financial insights that the mainstream media won't tell you",
+    "end_video": "Tap the link in my bio for my free crypto starter guide",
+    "comment_prompts": ["What's your biggest financial goal?", "Drop a 💰 if you found this helpful"]
+  },
+  "voice_characteristics": {
+    "reference_sample": "finance_expert_sample.wav",
+    "description": "Deep, confident male voice with clear articulation and moderate pace",
+    "emotion_range": "Primarily serious with occasional enthusiasm for breakthroughs"
+  }
+}

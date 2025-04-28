@@ -1,0 +1,162 @@
+{
+  "finance": {
+    "topics": [
+      "cryptocurrency", "personal_finance", "investing", "stock_market", 
+      "passive_income", "financial_freedom", "budgeting", "saving_tips"
+    ],
+    "audience": {
+      "age_range": [25, 45],
+      "gender_split": {"male": 0.65, "female": 0.35},
+      "interests": ["business", "economics", "technology", "entrepreneurship"]
+    },
+    "monetization_potential": 0.9,
+    "competition_level": 0.8,
+    "growth_rate": 0.7,
+    "saturation_threshold": 0.75,
+    "trending_keywords": [
+      "crypto", "passive income", "side hustle", "financial freedom", 
+      "investment strategy", "stock tips", "budget hacks"
+    ],
+    "cta_templates": [
+      "Aprende a invertir como un profesional",
+      "Descubre cómo multiplicar tus ahorros",
+      "Estrategias que los bancos no quieren que sepas",
+      "Comenta '💰' para más consejos financieros"
+    ],
+    "platforms": {
+      "youtube": 0.9,
+      "tiktok": 0.8,
+      "instagram": 0.7,
+      "threads": 0.6,
+      "x": 0.8
+    }
+  },
+  "fitness": {
+    "topics": [
+      "workout_routines", "nutrition", "weight_loss", "muscle_building", 
+      "home_workouts", "meal_prep", "fitness_motivation", "yoga"
+    ],
+    "audience": {
+      "age_range": [18, 35],
+      "gender_split": {"male": 0.5, "female": 0.5},
+      "interests": ["health", "nutrition", "sports", "wellness"]
+    },
+    "monetization_potential": 0.8,
+    "competition_level": 0.9,
+    "growth_rate": 0.8,
+    "saturation_threshold": 0.8,
+    "trending_keywords": [
+      "home workout", "weight loss", "nutrition tips", "muscle gain", 
+      "fitness journey", "meal prep", "transformation"
+    ],
+    "cta_templates": [
+      "Transforma tu cuerpo en 30 días",
+      "Rutina completa en solo 10 minutos",
+      "El secreto para quemar grasa rápidamente",
+      "Comenta '💪' para tu plan personalizado"
+    ],
+    "platforms": {
+      "youtube": 0.8,
+      "tiktok": 0.9,
+      "instagram": 0.9,
+      "threads": 0.7,
+      "x": 0.6
+    }
+  },
+  "technology": {
+    "topics": [
+      "ai", "gadgets", "software_reviews", "tech_news", "coding", 
+      "digital_tools", "cybersecurity", "future_tech"
+    ],
+    "audience": {
+      "age_range": [20, 40],
+      "gender_split": {"male": 0.7, "female": 0.3},
+      "interests": ["innovation", "programming", "science", "gaming"]
+    },
+    "monetization_potential": 0.85,
+    "competition_level": 0.75,
+    "growth_rate": 0.9,
+    "saturation_threshold": 0.7,
+    "trending_keywords": [
+      "AI tools", "ChatGPT", "tech review", "coding tutorial", 
+      "software hack", "digital productivity", "future technology"
+    ],
+    "cta_templates": [
+      "Descubre las herramientas que cambiarán tu productividad",
+      "Aprende a usar IA para automatizar tu trabajo",
+      "Reseñas honestas de los últimos gadgets",
+      "Comenta '🤖' para más trucos tecnológicos"
+    ],
+    "platforms": {
+      "youtube": 0.9,
+      "tiktok": 0.7,
+      "instagram": 0.6,
+      "threads": 0.8,
+      "x": 0.8
+    }
+  },
+  "gaming": {
+    "topics": [
+      "game_reviews", "gaming_tips", "esports", "game_walkthroughs", 
+      "gaming_news", "retro_gaming", "game_development", "streaming_tips"
+    ],
+    "audience": {
+      "age_range": [16, 30],
+      "gender_split": {"male": 0.75, "female": 0.25},
+      "interests": ["esports", "entertainment", "technology", "streaming"]
+    },
+    "monetization_potential": 0.75,
+    "competition_level": 0.85,
+    "growth_rate": 0.8,
+    "saturation_threshold": 0.8,
+    "trending_keywords": [
+      "gaming tips", "game review", "esports highlights", "gaming setup", 
+      "streaming guide", "game strategy", "gaming community"
+    ],
+    "cta_templates": [
+      "Domina el juego con estas estrategias",
+      "Secretos que los pros no quieren que sepas",
+      "Optimiza tu setup gaming con estos trucos",
+      "Comenta '🎮' para más contenido de gaming"
+    ],
+    "platforms": {
+      "youtube": 0.95,
+      "tiktok": 0.85,
+      "instagram": 0.7,
+      "threads": 0.6,
+      "x": 0.7
+    }
+  },
+  "comedy": {
+    "topics": [
+      "skits", "parodies", "stand_up", "pranks", "memes", 
+      "reaction_videos", "comedy_shorts", "satire"
+    ],
+    "audience": {
+      "age_range": [16, 35],
+      "gender_split": {"male": 0.55, "female": 0.45},
+      "interests": ["entertainment", "pop culture", "social media", "music"]
+    },
+    "monetization_potential": 0.7,
+    "competition_level": 0.8,
+    "growth_rate": 0.85,
+    "saturation_threshold": 0.75,
+    "trending_keywords": [
+      "comedy skit", "funny reaction", "prank", "meme review", 
+      "comedy short", "stand up clip", "parody"
+    ],
+    "cta_templates": [
+      "Más risas garantizadas en mi canal",
+      "No te pierdas el próximo episodio",
+      "Contenido que te hará reír a carcajadas",
+      "Comenta '😂' si te hizo reír"
+    ],
+    "platforms": {
+      "youtube": 0.8,
+      "tiktok": 0.95,
+      "instagram": 0.9,
+      "threads": 0.7,
+      "x": 0.75
+    }
+  }
+}

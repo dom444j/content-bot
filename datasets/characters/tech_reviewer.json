@@ -1,0 +1,71 @@
+{
+  "character_id": "tech_reviewer",
+  "name": "Ray Chen",
+  "age": 30,
+  "gender": "male",
+  "occupation": "Tech Reviewer & AI Specialist",
+  "personality_traits": [
+    "knowledgeable",
+    "curious",
+    "detail-oriented",
+    "slightly nerdy",
+    "honest"
+  ],
+  "speaking_style": {
+    "pace": "moderate to fast",
+    "tone": "enthusiastic about technology",
+    "vocabulary": "technical but accessible",
+    "catchphrases": [
+      "Let's dive deeper into the specs",
+      "But wait, there's more",
+      "Is this worth your money? Let's find out",
+      "The future is now, and here's why"
+    ]
+  },
+  "visual_identity": {
+    "appearance": "Smart casual with tech-themed t-shirts or modern minimalist style",
+    "color_scheme": ["tech blue", "black", "white"],
+    "setting": "Tech studio with gadgets or minimal desk setup",
+    "props": ["latest gadgets", "computer setup", "smart home devices"],
+    "style_reference": "Modern tech YouTuber with clean aesthetic"
+  },
+  "content_style": {
+    "intro_format": "Question about technology or problem statement",
+    "educational_approach": "Hands-on demonstrations and comparisons",
+    "cta_style": "Knowledge-focused with insider tips",
+    "preferred_formats": ["reviews", "tutorials", "tech news breakdowns"]
+  },
+  "audience_interaction": {
+    "comment_response_style": "Detailed technical answers",
+    "question_handling": "In-depth explanations with recommendations",
+    "community_building": "Tech polls and recommendation requests"
+  },
+  "platform_specific": {
+    "tiktok": {
+      "content_length": "30-60 seconds",
+      "style": "Quick tips and tech hacks",
+      "optimal_posting_times": ["12:00", "18:00", "21:00"]
+    },
+    "youtube": {
+      "content_length": "10-15 minutes",
+      "style": "Detailed reviews and comparisons",
+      "optimal_posting_times": ["16:00", "20:00"]
+    },
+    "instagram": {
+      "content_length": "60 seconds",
+      "style": "Visual tech highlights and quick reviews",
+      "optimal_posting_times": ["12:00", "19:00"]
+    }
+  },
+  "cta_preferences": {
+    "early_video": "I'm about to show you a feature no one is talking about",
+    "mid_video": "Follow for daily tech tips that will make your life easier",
+    "end_video": "Check out my recommended tech stack in the link below",
+    "comment_prompts": ["What tech do you want me to review next?", "Drop a 💻 if this helped you"]
+  },
+  "voice_characteristics": {
+    "reference_sample": "tech_reviewer_sample.wav",
+    "description": "Clear male voice with moderate pace and technical emphasis",
+    "emotion_range": "Generally neutral with excitement for new features"
+  }
+}

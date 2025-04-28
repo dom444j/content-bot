@@ -1,0 +1,231 @@
+{
+    "tiktok": {
+        "follow": [
+            "Sígueme para más consejos de {tema}",
+            "Si te gustó, dale follow para no perderte nada",
+            "Sigue mi cuenta para más contenido como este",
+            "¿Te ha gustado? Sígueme para más",
+            "Dale follow si quieres más tips de {tema}"
+        ],
+        "like": [
+            "Dale like si te ha servido",
+            "Si te ha ayudado, deja tu like",
+            "¿Te ha gustado? Deja tu like",
+            "Like si te ha parecido útil",
+            "Un like ayuda mucho al algoritmo"
+        ],
+        "comment": [
+            "Comenta qué te ha parecido",
+            "Deja en comentarios tu experiencia con {tema}",
+            "¿Qué opinas? Déjalo en comentarios",
+            "Comenta si quieres más videos sobre {tema}",
+            "Dime en comentarios si te ha funcionado"
+        ],
+        "save": [
+            "Guarda este video para cuando lo necesites",
+            "Dale a guardar para tenerlo siempre a mano",
+            "No te olvides de guardar este tip",
+            "Guarda este video para consultarlo después",
+            "Dale a guardar para no perderlo"
+        ],
+        "share": [
+            "Comparte con alguien que necesite ver esto",
+            "Si conoces a alguien que necesita esto, compártelo",
+            "Ayuda a tus amigos compartiendo este video",
+            "Comparte este tip con quien lo necesite",
+            "Dale a compartir si crees que puede ayudar a alguien"
+        ]
+    },
+    "instagram": {
+        "follow": [
+            "Sígueme para más inspiración sobre {tema}",
+            "No te pierdas mis próximos posts, sígueme",
+            "Para más contenido como este, sígueme",
+            "Si te ha gustado, sígueme para no perderte nada",
+            "Dale a seguir para más contenido de valor"
+        ],
+        "like": [
+            "Dale like si te ha inspirado",
+            "Si te ha gustado, deja tu like",
+            "Un like me ayuda a llegar a más personas",
+            "¿Te ha servido? Dale like",
+            "Muestra tu apoyo con un like"
+        ],
+        "comment": [
+            "Cuéntame en comentarios tu experiencia",
+            "Deja tu opinión en los comentarios",
+            "¿Qué te ha parecido? Comenta abajo",
+            "Comenta qué otros temas te gustaría ver",
+            "Los comentarios me ayudan a mejorar, déjame el tuyo"
+        ],
+        "save": [
+            "Guarda este post para cuando lo necesites",
+            "Dale a guardar para tenerlo siempre a mano",
+            "Guarda este contenido en tu colección",
+            "No te olvides de guardar para consultarlo después",
+            "Guárdalo para cuando necesites inspiración"
+        ],
+        "share": [
+            "Comparte en stories si te ha gustado",
+            "Envíaselo a quien creas que le puede ayudar",
+            "Comparte este post con tus amigos",
+            "Si conoces a alguien que necesita esto, compártelo",
+            "Ayuda a otros compartiendo este contenido"
+        ]
+    },
+    "youtube_shorts": {
+        "follow": [
+            "Suscríbete para más shorts como este",
+            "No te pierdas mis próximos shorts, suscríbete",
+            "Dale a suscribir para más contenido corto",
+            "Suscríbete para más tips rápidos",
+            "¿Te ha gustado? Suscríbete para más"
+        ],
+        "like": [
+            "Dale like si te ha servido",
+            "Un like ayuda mucho al canal",
+            "Si te ha gustado, deja tu like",
+            "Like si quieres más shorts como este",
+            "¿Te ha ayudado? Dale like"
+        ],
+        "comment": [
+            "Deja tu opinión en los comentarios",
+            "Comenta qué otros shorts te gustaría ver",
+            "¿Qué te ha parecido? Comenta abajo",
+            "Cuéntame en comentarios tu experiencia con {tema}",
+            "Los comentarios me ayudan a mejorar, déjame el tuyo"
+        ],
+        "share": [
+            "Comparte este short con quien lo necesite",
+            "Ayuda a otros compartiendo este tip",
+            "Si conoces a alguien que necesita esto, compártelo",
+            "Comparte este short con tus amigos",
+            "Compartir ayuda a que el canal crezca"
+        ],
+        "bell": [
+            "Activa la campanita para no perderte nada",
+            "Dale a la campanita para notificaciones",
+            "No te pierdas mis próximos shorts, activa la campanita",
+            "Activa las notificaciones para más contenido como este",
+            "¿Te ha gustado? Activa la campanita"
+        ]
+    },
+    "youtube": {
+        "subscribe": [
+            "Suscríbete al canal para más contenido sobre {tema}",
+            "Si te ha gustado, no olvides suscribirte",
+            "Dale a suscribir para apoyar el canal",
+            "Suscríbete para no perderte los próximos videos",
+            "¿Te ha servido este video? Suscríbete para más"
+        ],
+        "like": [
+            "Dale like si te ha parecido útil",
+            "Un like ayuda mucho al algoritmo",
+            "Si te ha gustado, deja tu like",
+            "Apoya el canal con un like",
+            "¿Te ha servido? Dale like"
+        ],
+        "comment": [
+            "Deja tu opinión en los comentarios",
+            "Cuéntame en comentarios qué te ha parecido",
+            "¿Qué opinas sobre {tema}? Déjalo en comentarios",
+            "Comenta qué otros temas te gustaría ver",
+            "Los comentarios me ayudan a mejorar, déjame el tuyo"
+        ],
+        "bell": [
+            "Activa la campanita para no perderte ningún video",
+            "Dale a la campanita para recibir notificaciones",
+            "No te pierdas mis próximos videos, activa la campanita",
+            "Para estar al día con el contenido, activa las notificaciones",
+            "¿Te ha gustado? Activa la campanita"
+        ],
+        "playlist": [
+            "Mira la playlist completa sobre {tema}",
+            "Tengo una playlist con más videos como este",
+            "No te pierdas mi playlist sobre {tema}",
+            "Encuentra más contenido en mi playlist especializada",
+            "He creado una playlist con todo lo que necesitas saber sobre {tema}"
+        ],
+        "membership": [
+            "Apoya el canal haciéndote miembro",
+            "Únete como miembro para contenido exclusivo",
+            "Hazte miembro y accede a beneficios especiales",
+            "¿Te gusta mi contenido? Considera hacerte miembro",
+            "Los miembros del canal reciben contenido adicional sobre {tema}"
+        ]
+    },
+    "general": {
+        "website": [
+            "Visita mi web para más información: {url}",
+            "Encuentra recursos adicionales en mi página web",
+            "Para más detalles, entra en mi web: {url}",
+            "Todo lo que necesitas está en mi web: {url}",
+            "Descarga recursos gratuitos en mi página web"
+        ],
+        "course": [
+            "Aprende más en mi curso sobre {tema}",
+            "He creado un curso completo sobre {tema}",
+            "¿Quieres dominar {tema}? Mira mi curso",
+            "Entra en el link en bio para acceder a mi curso",
+            "Aprende {tema} paso a paso en mi curso"
+        ],
+        "ebook": [
+            "Descarga mi ebook gratuito sobre {tema}",
+            "He creado una guía completa sobre {tema}",
+            "Todo lo que necesitas saber en mi ebook gratuito",
+            "Aprende más con mi ebook, link en bio",
+            "Descarga mi guía definitiva sobre {tema}"
+        ],
+        "newsletter": [
+            "Suscríbete a mi newsletter para más consejos",
+            "Recibe tips semanales en tu email",
+            "No te pierdas mis actualizaciones, suscríbete a mi newsletter",
+            "Únete a mi comunidad a través de mi newsletter",
+            "Contenido exclusivo en mi newsletter semanal"
+        ],
+        "community": [
+            "Únete a nuestra comunidad de {tema}",
+            "Comparte experiencias en nuestro grupo",
+            "Aprende junto a otros en nuestra comunidad",
+            "No estás solo, únete a nuestra comunidad",
+            "Encuentra apoyo en nuestra comunidad de {tema}"
+        ]
+    },
+    "niche": {
+        "finance": [
+            "Descarga mi plantilla de presupuesto gratuita",
+            "Accede a mi calculadora de inversiones",
+            "Únete a mi webinar sobre {tema}",
+            "Descubre mis estrategias de inversión",
+            "Aprende a gestionar tus finanzas con mi guía"
+        ],
+        "health": [
+            "Descarga mi plan de alimentación gratuito",
+            "Accede a mi rutina de ejercicios",
+            "Únete a mi reto de 30 días",
+            "Prueba mi receta saludable favorita",
+            "Descubre mi método para {tema}"
+        ],
+        "technology": [
+            "Descarga mi lista de herramientas recomendadas",
+            "Accede a mi tutorial paso a paso",
+            "Prueba el código de ejemplo en mi GitHub",
+            "Descarga mi cheat sheet de {tema}",
+            "Aprende más con mi guía técnica"
+        ],
+        "gaming": [
+            "Únete a mi servidor de Discord",
+            "Juega conmigo en directo en Twitch",
+            "Descarga mi configuración óptima",
+            "Accede a mis guías de estrategia",
+            "Mira mis partidas completas en mi canal"
+        ],
+        "education": [
+            "Descarga mis apuntes gratuitos",
+            "Accede a mis ejercicios prácticos",
+            "Prueba mi método de estudio",
+            "Descarga mi resumen de {tema}",
+            "Aprende con mis fichas de estudio"
+        ]
+    }
+}

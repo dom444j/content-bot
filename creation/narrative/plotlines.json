@@ -1,0 +1,434 @@
+{
+    "finance": {
+        "problem_solution": {
+            "hook": "Presentar un problema financiero común",
+            "development": "Explicar por qué ocurre y sus consecuencias",
+            "climax": "Revelar la solución y sus beneficios",
+            "segments": [
+                "Problema financiero",
+                "Causas del problema",
+                "Consecuencias",
+                "Solución propuesta",
+                "Beneficios inmediatos",
+                "Resultados a largo plazo",
+                "Llamada a la acción"
+            ]
+        },
+        "myth_busting": {
+            "hook": "Presentar un mito financiero popular",
+            "development": "Desmentir con datos y ejemplos",
+            "climax": "Revelar la verdad y sus implicaciones",
+            "segments": [
+                "Mito financiero común",
+                "Por qué la gente lo cree",
+                "Datos que lo desmienten",
+                "Ejemplos reales",
+                "La verdad revelada",
+                "Implicaciones prácticas",
+                "Llamada a la acción"
+            ]
+        },
+        "opportunity_reveal": {
+            "hook": "Insinuar una oportunidad financiera poco conocida",
+            "development": "Explicar cómo funciona y sus requisitos",
+            "climax": "Mostrar resultados potenciales y próximos pasos",
+            "segments": [
+                "Oportunidad desconocida",
+                "Por qué pocos la conocen",
+                "Cómo funciona",
+                "Requisitos necesarios",
+                "Resultados potenciales",
+                "Riesgos a considerar",
+                "Llamada a la acción"
+            ]
+        },
+        "comparison": {
+            "hook": "Contrastar dos opciones financieras populares",
+            "development": "Analizar pros y contras de cada una",
+            "climax": "Revelar cuál es mejor y por qué",
+            "segments": [
+                "Presentación de opciones",
+                "Criterios de comparación",
+                "Ventajas de opción A",
+                "Ventajas de opción B",
+                "Desventajas de ambas",
+                "Veredicto final",
+                "Llamada a la acción"
+            ]
+        },
+        "tutorial": {
+            "hook": "Prometer un resultado financiero específico",
+            "development": "Explicar el proceso paso a paso",
+            "climax": "Mostrar el resultado final y motivar a la acción",
+            "segments": [
+                "Resultado prometido",
+                "Requisitos previos",
+                "Paso 1",
+                "Paso 2",
+                "Paso 3",
+                "Resultado final",
+                "Llamada a la acción"
+            ]
+        }
+    },
+    "health": {
+        "transformation": {
+            "hook": "Mostrar un antes/después impactante",
+            "development": "Explicar el proceso y los obstáculos",
+            "climax": "Revelar el secreto clave y resultados",
+            "segments": [
+                "Situación inicial",
+                "Punto de inflexión",
+                "Método descubierto",
+                "Obstáculos superados",
+                "Resultados iniciales",
+                "Transformación completa",
+                "Llamada a la acción"
+            ]
+        },
+        "quick_tip": {
+            "hook": "Prometer un beneficio de salud rápido",
+            "development": "Explicar la técnica paso a paso",
+            "climax": "Mostrar resultados inmediatos y a largo plazo",
+            "segments": [
+                "Problema de salud común",
+                "Solución rápida",
+                "Explicación científica",
+                "Demostración práctica",
+                "Resultados inmediatos",
+                "Beneficios adicionales",
+                "Llamada a la acción"
+            ]
+        },
+        "myth_busting": {
+            "hook": "Cuestionar una creencia popular sobre salud",
+            "development": "Presentar evidencia científica contraria",
+            "climax": "Revelar la verdad y sus implicaciones",
+            "segments": [
+                "Mito de salud común",
+                "Por qué se popularizó",
+                "Evidencia científica",
+                "Estudios relevantes",
+                "La verdad revelada",
+                "Recomendaciones correctas",
+                "Llamada a la acción"
+            ]
+        },
+        "day_in_life": {
+            "hook": "Mostrar resultados de salud impresionantes",
+            "development": "Revelar la rutina diaria completa",
+            "climax": "Destacar los elementos clave y motivar",
+            "segments": [
+                "Resultados de salud",
+                "Rutina matutina",
+                "Alimentación",
+                "Ejercicio",
+                "Hábitos clave",
+                "Consejos prácticos",
+                "Llamada a la acción"
+            ]
+        },
+        "expert_advice": {
+            "hook": "Compartir un consejo de salud poco conocido",
+            "development": "Explicar la ciencia detrás y aplicaciones",
+            "climax": "Mostrar cómo implementarlo y beneficios",
+            "segments": [
+                "Consejo de experto",
+                "Fundamento científico",
+                "Aplicaciones prácticas",
+                "Errores comunes",
+                "Implementación correcta",
+                "Resultados esperados",
+                "Llamada a la acción"
+            ]
+        }
+    },
+    "technology": {
+        "review": {
+            "hook": "Mostrar un producto tecnológico interesante",
+            "development": "Analizar características y rendimiento",
+            "climax": "Dar veredicto final y recomendaciones",
+            "segments": [
+                "Presentación del producto",
+                "Primeras impresiones",
+                "Características principales",
+                "Pruebas de rendimiento",
+                "Comparación con alternativas",
+                "Veredicto final",
+                "Llamada a la acción"
+            ]
+        },
+        "tutorial": {
+            "hook": "Presentar un problema tecnológico común",
+            "development": "Mostrar la solución paso a paso",
+            "climax": "Revelar el resultado final y consejos adicionales",
+            "segments": [
+                "Problema tecnológico",
+                "Solución propuesta",
+                "Paso 1",
+                "Paso 2",
+                "Paso 3",
+                "Resultado final",
+                "Llamada a la acción"
+            ]
+        },
+        "news_analysis": {
+            "hook": "Compartir una noticia tecnológica impactante",
+            "development": "Analizar implicaciones y contexto",
+            "climax": "Ofrecer perspectiva única y predicciones",
+            "segments": [
+                "Noticia principal",
+                "Contexto histórico",
+                "Análisis técnico",
+                "Impacto en el mercado",
+                "Implicaciones futuras",
+                "Recomendaciones",
+                "Llamada a la acción"
+            ]
+        },
+        "comparison": {
+            "hook": "Contrastar dos productos/tecnologías populares",
+            "development": "Analizar pros y contras de cada uno",
+            "climax": "Revelar cuál es mejor y para quién",
+            "segments": [
+                "Presentación de opciones",
+                "Especificaciones técnicas",
+                "Pruebas comparativas",
+                "Experiencia de usuario",
+                "Relación calidad-precio",
+                "Veredicto final",
+                "Llamada a la acción"
+            ]
+        },
+        "hidden_features": {
+            "hook": "Prometer funciones desconocidas de un producto popular",
+            "development": "Mostrar características ocultas una por una",
+            "climax": "Revelar la función más impresionante y conclusión",
+            "segments": [
+                "Producto popular",
+                "Función oculta 1",
+                "Función oculta 2",
+                "Función oculta 3",
+                "Función principal",
+                "Cómo aprovecharlas",
+                "Llamada a la acción"
+            ]
+        }
+    },
+    "gaming": {
+        "strategy": {
+            "hook": "Mostrar una jugada impresionante",
+            "development": "Explicar la estrategia paso a paso",
+            "climax": "Demostrar resultados y situaciones de uso",
+            "segments": [
+                "Jugada impresionante",
+                "Contexto del juego",
+                "Preparación necesaria",
+                "Ejecución paso a paso",
+                "Posibles variaciones",
+                "Situaciones ideales",
+                "Llamada a la acción"
+            ]
+        },
+        "news": {
+            "hook": "Anunciar una noticia impactante de gaming",
+            "development": "Analizar detalles y contexto",
+            "climax": "Discutir implicaciones y opinión personal",
+            "segments": [
+                "Noticia principal",
+                "Fuentes y confirmación",
+                "Detalles importantes",
+                "Contexto histórico",
+                "Reacciones de la comunidad",
+                "Implicaciones futuras",
+                "Llamada a la acción"
+            ]
+        },
+        "review": {
+            "hook": "Mostrar aspectos visuales impactantes de un juego",
+            "development": "Analizar jugabilidad, historia y técnica",
+            "climax": "Dar puntuación final y recomendaciones",
+            "segments": [
+                "Presentación del juego",
+                "Gráficos y sonido",
+                "Jugabilidad",
+                "Historia y personajes",
+                "Comparación con otros títulos",
+                "Veredicto final",
+                "Llamada a la acción"
+            ]
+        },
+        "easter_egg": {
+            "hook": "Insinuar un secreto poco conocido en un juego popular",
+            "development": "Mostrar cómo encontrarlo paso a paso",
+            "climax": "Revelar el secreto completo y su significado",
+            "segments": [
+                "Juego popular",
+                "Pista inicial",
+                "Ubicación secreta",
+                "Pasos para activarlo",
+                "Secreto revelado",
+                "Teorías y significado",
+                "Llamada a la acción"
+            ]
+        },
+        "tier_list": {
+            "hook": "Prometer la clasificación definitiva",
+            "development": "Analizar cada elemento con criterios claros",
+            "climax": "Revelar los mejores y peores con explicación",
+            "segments": [
+                "Introducción a la tier list",
+                "Criterios de evaluación",
+                "Categoría C y B",
+                "Categoría A",
+                "Categoría S (top tier)",
+                "Recomendaciones finales",
+                "Llamada a la acción"
+            ]
+        }
+    },
+    "humor": {
+        "skit": {
+            "hook": "Establecer una situación cotidiana",
+            "development": "Introducir el elemento humorístico",
+            "climax": "Entregar el punchline inesperado",
+            "segments": [
+                "Situación inicial",
+                "Personajes involucrados",
+                "Desarrollo de expectativas",
+                "Giro inesperado",
+                "Reacción humorística",
+                "Resolución cómica",
+                "Llamada a la acción"
+            ]
+        },
+        "reaction": {
+            "hook": "Mostrar contenido viral sorprendente",
+            "development": "Reaccionar de forma exagerada",
+            "climax": "Comentario final humorístico",
+            "segments": [
+                "Introducción al contenido",
+                "Primera reacción",
+                "Análisis humorístico",
+                "Comparaciones exageradas",
+                "Momento de sorpresa",
+                "Comentario final",
+                "Llamada a la acción"
+            ]
+        },
+        "parody": {
+            "hook": "Imitar un formato o persona reconocible",
+            "development": "Exagerar características distintivas",
+            "climax": "Llevar la parodia al extremo cómico",
+            "segments": [
+                "Presentación del original",
+                "Imitación inicial",
+                "Exageración de rasgos",
+                "Situación absurda",
+                "Contraste con realidad",
+                "Conclusión humorística",
+                "Llamada a la acción"
+            ]
+        },
+        "challenge": {
+            "hook": "Proponer un reto absurdo o difícil",
+            "development": "Mostrar intentos fallidos o cómicos",
+            "climax": "Resolución inesperada o fracaso humorístico",
+            "segments": [
+                "Presentación del reto",
+                "Preparativos cómicos",
+                "Primer intento",
+                "Complicaciones inesperadas",
+                "Intento final",
+                "Resultado sorprendente",
+                "Llamada a la acción"
+            ]
+        },
+        "storytime": {
+            "hook": "Prometer una anécdota increíble",
+            "development": "Narrar eventos con giros humorísticos",
+            "climax": "Revelar el desenlace cómico inesperado",
+            "segments": [
+                "Introducción a la historia",
+                "Contexto y personajes",
+                "Desarrollo de eventos",
+                "Complicación principal",
+                "Momento de tensión",
+                "Desenlace cómico",
+                "Llamada a la acción"
+            ]
+        }
+    },
+    "education": {
+        "explainer": {
+            "hook": "Plantear una pregunta intrigante",
+            "development": "Explicar conceptos de forma simple y visual",
+            "climax": "Revelar la respuesta completa y aplicaciones",
+            "segments": [
+                "Pregunta inicial",
+                "Contexto histórico",
+                "Concepto básico",
+                "Explicación detallada",
+                "Ejemplos prácticos",
+                "Aplicaciones reales",
+                "Llamada a la acción"
+            ]
+        },
+        "quick_lesson": {
+            "hook": "Prometer aprender algo útil en poco tiempo",
+            "development": "Enseñar la habilidad paso a paso",
+            "climax": "Mostrar el resultado final y motivar a practicar",
+            "segments": [
+                "Habilidad prometida",
+                "Por qué es útil",
+                "Paso 1",
+                "Paso 2",
+                "Paso 3",
+                "Demostración final",
+                "Llamada a la acción"
+            ]
+        },
+        "myth_busting": {
+            "hook": "Cuestionar una creencia educativa común",
+            "development": "Presentar evidencia científica",
+            "climax": "Revelar la verdad y mejores prácticas",
+            "segments": [
+                "Mito educativo",
+                "Origen del mito",
+                "Investigación científica",
+                "Evidencia contraria",
+                "La verdad revelada",
+                "Métodos efectivos",
+                "Llamada a la acción"
+            ]
+        },
+        "historical": {
+            "hook": "Revelar un dato histórico sorprendente",
+            "development": "Narrar la historia con contexto",
+            "climax": "Conectar con la actualidad y lecciones",
+            "segments": [
+                "Dato sorprendente",
+                "Contexto histórico",
+                "Personajes clave",
+                "Desarrollo de eventos",
+                "Desenlace histórico",
+                "Impacto actual",
+                "Llamada a la acción"
+            ]
+        },
+        "experiment": {
+            "hook": "Mostrar un experimento intrigante",
+            "development": "Explicar el proceso científico",
+            "climax": "Revelar resultados y explicación científica",
+            "segments": [
+                "Pregunta científica",
+                "Materiales necesarios",
+                "Procedimiento",
+                "Observaciones",
+                "Resultados",
+                "Explicación científica",
+                "Llamada a la acción"
+            ]
+        }
+    }
+}

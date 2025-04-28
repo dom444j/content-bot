@@ -1,0 +1,251 @@
+{
+  "version": "1.0",
+  "last_updated": "2023-11-15",
+  "categories": {
+    "finance": {
+      "crypto": [
+        {
+          "name": "Bitcoin ETF Approval",
+          "keywords": ["Bitcoin ETF", "crypto ETF", "BTC ETF", "SEC approval"],
+          "sentiment": "positive",
+          "growth_rate": 0.85,
+          "estimated_duration_days": 14,
+          "platforms": ["YouTube", "TikTok", "Instagram"],
+          "audience": ["investors", "crypto enthusiasts", "finance professionals"]
+        },
+        {
+          "name": "DeFi Yield Farming",
+          "keywords": ["yield farming", "DeFi staking", "liquidity mining", "passive income crypto"],
+          "sentiment": "neutral",
+          "growth_rate": 0.65,
+          "estimated_duration_days": 30,
+          "platforms": ["YouTube", "TikTok"],
+          "audience": ["crypto traders", "investors"]
+        },
+        {
+          "name": "NFT Market Recovery",
+          "keywords": ["NFT comeback", "NFT market recovery", "blue chip NFTs", "NFT trading"],
+          "sentiment": "positive",
+          "growth_rate": 0.55,
+          "estimated_duration_days": 21,
+          "platforms": ["Instagram", "TikTok", "YouTube"],
+          "audience": ["digital artists", "collectors", "investors"]
+        }
+      ],
+      "personal_finance": [
+        {
+          "name": "Inflation Hedging Strategies",
+          "keywords": ["inflation hedge", "protect savings", "beat inflation", "inflation investing"],
+          "sentiment": "neutral",
+          "growth_rate": 0.75,
+          "estimated_duration_days": 60,
+          "platforms": ["YouTube", "Instagram"],
+          "audience": ["general public", "investors", "savers"]
+        },
+        {
+          "name": "Side Hustle Ideas 2023",
+          "keywords": ["side hustle", "passive income", "extra money", "work from home"],
+          "sentiment": "positive",
+          "growth_rate": 0.90,
+          "estimated_duration_days": 90,
+          "platforms": ["TikTok", "YouTube", "Instagram"],
+          "audience": ["young adults", "professionals", "students"]
+        }
+      ]
+    },
+    "health": {
+      "fitness": [
+        {
+          "name": "15-Minute HIIT Workouts",
+          "keywords": ["quick HIIT", "15 minute workout", "fat burning HIIT", "home workout"],
+          "sentiment": "positive",
+          "growth_rate": 0.80,
+          "estimated_duration_days": 45,
+          "platforms": ["TikTok", "Instagram", "YouTube"],
+          "audience": ["fitness enthusiasts", "busy professionals", "beginners"]
+        },
+        {
+          "name": "Protein-Packed Recipes",
+          "keywords": ["high protein meals", "protein recipes", "muscle building food", "fitness nutrition"],
+          "sentiment": "positive",
+          "growth_rate": 0.70,
+          "estimated_duration_days": 30,
+          "platforms": ["Instagram", "TikTok"],
+          "audience": ["fitness enthusiasts", "bodybuilders", "health-conscious"]
+        }
+      ],
+      "mindfulness": [
+        {
+          "name": "One-Minute Meditation",
+          "keywords": ["quick meditation", "mindfulness break", "stress relief", "meditation for beginners"],
+          "sentiment": "positive",
+          "growth_rate": 0.85,
+          "estimated_duration_days": 60,
+          "platforms": ["TikTok", "Instagram", "YouTube"],
+          "audience": ["busy professionals", "students", "stress management seekers"]
+        },
+        {
+          "name": "Sleep Optimization Techniques",
+          "keywords": ["better sleep", "sleep hacks", "insomnia tips", "deep sleep"],
+          "sentiment": "positive",
+          "growth_rate": 0.75,
+          "estimated_duration_days": 90,
+          "platforms": ["YouTube", "TikTok"],
+          "audience": ["insomniacs", "health-conscious", "productivity seekers"]
+        }
+      ]
+    },
+    "technology": {
+      "ai": [
+        {
+          "name": "AI Image Generation Tools",
+          "keywords": ["AI art", "image generation", "Midjourney", "DALL-E", "Stable Diffusion"],
+          "sentiment": "positive",
+          "growth_rate": 0.95,
+          "estimated_duration_days": 120,
+          "platforms": ["YouTube", "TikTok", "Instagram"],
+          "audience": ["creators", "artists", "tech enthusiasts"]
+        },
+        {
+          "name": "ChatGPT Productivity Hacks",
+          "keywords": ["ChatGPT tips", "AI productivity", "prompt engineering", "ChatGPT for work"],
+          "sentiment": "positive",
+          "growth_rate": 0.90,
+          "estimated_duration_days": 60,
+          "platforms": ["TikTok", "YouTube", "Instagram"],
+          "audience": ["professionals", "students", "content creators"]
+        }
+      ],
+      "gadgets": [
+        {
+          "name": "Foldable Smartphones Review",
+          "keywords": ["foldable phones", "Samsung Fold", "flip phones", "smartphone innovation"],
+          "sentiment": "neutral",
+          "growth_rate": 0.65,
+          "estimated_duration_days": 30,
+          "platforms": ["YouTube", "TikTok"],
+          "audience": ["tech enthusiasts", "early adopters", "smartphone users"]
+        },
+        {
+          "name": "Budget Smart Home Devices",
+          "keywords": ["affordable smart home", "budget automation", "smart home beginners", "cheap smart devices"],
+          "sentiment": "positive",
+          "growth_rate": 0.75,
+          "estimated_duration_days": 45,
+          "platforms": ["YouTube", "TikTok"],
+          "audience": ["homeowners", "renters", "tech beginners"]
+        }
+      ]
+    },
+    "gaming": {
+      "strategy": [
+        {
+          "name": "Baldur's Gate 3 Class Builds",
+          "keywords": ["BG3 builds", "Baldur's Gate 3 class guide", "best BG3 characters", "D&D builds"],
+          "sentiment": "positive",
+          "growth_rate": 0.85,
+          "estimated_duration_days": 90,
+          "platforms": ["YouTube", "TikTok"],
+          "audience": ["RPG gamers", "D&D fans", "strategy gamers"]
+        },
+        {
+          "name": "Minecraft Redstone Tutorials",
+          "keywords": ["Minecraft redstone", "redstone contraptions", "Minecraft automation", "redstone tutorial"],
+          "sentiment": "positive",
+          "growth_rate": 0.70,
+          "estimated_duration_days": 180,
+          "platforms": ["YouTube", "TikTok"],
+          "audience": ["Minecraft players", "young gamers", "engineering enthusiasts"]
+        }
+      ],
+      "esports": [
+        {
+          "name": "Valorant Pro Strategies",
+          "keywords": ["Valorant tips", "pro Valorant", "Valorant agent guide", "FPS improvement"],
+          "sentiment": "positive",
+          "growth_rate": 0.80,
+          "estimated_duration_days": 30,
+          "platforms": ["TikTok", "YouTube"],
+          "audience": ["competitive gamers", "FPS players", "esports fans"]
+        },
+        {
+          "name": "League of Legends Meta Analysis",
+          "keywords": ["LoL meta", "League tier list", "LoL champion guide", "MOBA strategy"],
+          "sentiment": "neutral",
+          "growth_rate": 0.75,
+          "estimated_duration_days": 14,
+          "platforms": ["YouTube", "TikTok"],
+          "audience": ["MOBA players", "competitive gamers", "esports enthusiasts"]
+        }
+      ]
+    },
+    "humor": {
+      "memes": [
+        {
+          "name": "AI Generated Memes",
+          "keywords": ["AI memes", "ChatGPT humor", "AI jokes", "tech humor"],
+          "sentiment": "positive",
+          "growth_rate": 0.95,
+          "estimated_duration_days": 30,
+          "platforms": ["TikTok", "Instagram", "YouTube"],
+          "audience": ["gen Z", "millennials", "tech users"]
+        },
+        {
+          "name": "Corporate Humor Skits",
+          "keywords": ["office humor", "corporate jokes", "workplace comedy", "professional humor"],
+          "sentiment": "positive",
+          "growth_rate": 0.85,
+          "estimated_duration_days": 45,
+          "platforms": ["TikTok", "Instagram"],
+          "audience": ["office workers", "professionals", "corporate employees"]
+        }
+      ],
+      "parody": [
+        {
+          "name": "Movie Trailer Parodies",
+          "keywords": ["trailer parody", "movie spoof", "funny trailer", "film parody"],
+          "sentiment": "positive",
+          "growth_rate": 0.75,
+          "estimated_duration_days": 14,
+          "platforms": ["TikTok", "YouTube", "Instagram"],
+          "audience": ["movie fans", "comedy lovers", "general public"]
+        },
+        {
+          "name": "Celebrity Impression Challenges",
+          "keywords": ["celebrity impressions", "voice impressions", "impression challenge", "sound like celebrity"],
+          "sentiment": "positive",
+          "growth_rate": 0.80,
+          "estimated_duration_days": 21,
+          "platforms": ["TikTok", "Instagram", "YouTube"],
+          "audience": ["entertainment fans", "comedy enthusiasts", "social media users"]
+        }
+      ]
+    }
+  },
+  "seasonal_trends": [
+    {
+      "name": "Holiday Gift Guides",
+      "start_month": 11,
+      "end_month": 12,
+      "keywords": ["gift ideas", "holiday shopping", "Christmas gifts", "budget presents"],
+      "categories": ["technology", "gaming", "lifestyle"],
+      "platforms": ["YouTube", "TikTok", "Instagram"]
+    },
+    {
+      "name": "New Year Resolutions",
+      "start_month": 12,
+      "end_month": 1,
+      "keywords": ["new year goals", "resolution ideas", "habit building", "self improvement"],
+      "categories": ["health", "finance", "productivity"],
+      "platforms": ["YouTube", "TikTok", "Instagram"]
+    },
+    {
+      "name": "Summer Fitness Challenges",
+      "start_month": 5,
+      "end_month": 8,
+      "keywords": ["summer body", "fitness challenge", "beach workout", "weight loss"],
+      "categories": ["health", "fitness"],
+      "platforms": ["TikTok", "Instagram", "YouTube"]
+    }
+  ]
+}

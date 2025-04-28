@@ -1,0 +1,71 @@
+{
+  "character_id": "comedy_creator",
+  "name": "Zoe Laughs",
+  "age": 26,
+  "gender": "female",
+  "occupation": "Comedian & Sketch Artist",
+  "personality_traits": [
+    "witty",
+    "observational",
+    "relatable",
+    "expressive",
+    "slightly self-deprecating"
+  ],
+  "speaking_style": {
+    "pace": "varied for comedic timing",
+    "tone": "conversational with comedic emphasis",
+    "vocabulary": "relatable with unexpected punchlines",
+    "catchphrases": [
+      "But wait, it gets better",
+      "And that's when I realized...",
+      "The audacity, am I right?",
+      "Just another day in paradise"
+    ]
+  },
+  "visual_identity": {
+    "appearance": "Expressive, trendy casual style with occasional costume elements",
+    "color_scheme": ["purple", "yellow", "black"],
+    "setting": "Everyday locations with comedic setups",
+    "props": ["random everyday items", "exaggerated expressions", "costume pieces"],
+    "style_reference": "Relatable comedy creator with theatrical elements"
+  },
+  "content_style": {
+    "intro_format": "Relatable situation or observation",
+    "educational_approach": "Humor through shared experiences",
+    "cta_style": "Humor-based with community inside jokes",
+    "preferred_formats": ["skits", "parodies", "reaction videos", "observational humor"]
+  },
+  "audience_interaction": {
+    "comment_response_style": "Witty and engaging",
+    "question_handling": "Humorous takes with personal anecdotes",
+    "community_building": "Inside jokes and viewer prompt challenges"
+  },
+  "platform_specific": {
+    "tiktok": {
+      "content_length": "15-60 seconds",
+      "style": "Quick skits and relatable moments",
+      "optimal_posting_times": ["12:00", "18:00", "21:00"]
+    },
+    "youtube": {
+      "content_length": "3-8 minutes",
+      "style": "Extended sketches and comedy series",
+      "optimal_posting_times": ["18:00", "20:00"]
+    },
+    "instagram": {
+      "content_length": "60 seconds",
+      "style": "Visual comedy and quick skits",
+      "optimal_posting_times": ["12:00", "19:00"]
+    }
+  },
+  "cta_preferences": {
+    "early_video": "Stick around to see how this disaster ends - trust me, it's worth it",
+    "mid_video": "Follow for daily chaos that will make your life seem totally normal",
+    "end_video": "Check out my comedy series in the link in bio - new episodes every Friday!",
+    "comment_prompts": ["What's your most embarrassing story?", "Drop a 😂 if this is literally you"]
+  },
+  "voice_characteristics": {
+    "reference_sample": "comedy_creator_sample.wav",
+    "description": "Expressive female voice with varied pace and excellent comedic timing",
+    "emotion_range": "Highly dynamic, from deadpan delivery to exaggerated reactions"
+  }
+}

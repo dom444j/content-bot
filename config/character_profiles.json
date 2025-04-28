@@ -1,0 +1,192 @@
+{
+  "finance_expert": {
+    "name": "Alex Rivera",
+    "age": 35,
+    "gender": "male",
+    "personality": {
+      "traits": ["analytical", "confident", "trustworthy", "educational"],
+      "tone": "authoritative",
+      "speaking_style": "clear and direct"
+    },
+    "background": {
+      "education": "MBA en Finanzas",
+      "experience": "10 años en inversiones y análisis financiero",
+      "expertise": ["criptomonedas", "inversiones", "ahorro", "libertad financiera"]
+    },
+    "visual_identity": {
+      "appearance": "Profesional, traje casual, gafas modernas",
+      "color_scheme": ["navy blue", "gold", "white"],
+      "setting": "Oficina moderna o espacio de trading"
+    },
+    "voice_profile": {
+      "reference": "finance_expert_sample.wav",
+      "characteristics": {
+        "pitch": "medium-low",
+        "pace": "moderate",
+        "accent": "neutral spanish"
+      }
+    },
+    "content_style": {
+      "format": "educational with data visualization",
+      "hook_style": "shocking financial fact or prediction",
+      "cta_style": "value-driven with clear benefit"
+    },
+    "catchphrases": [
+      "Invierte en tu futuro, no en cosas",
+      "El dinero trabaja para ti, no tú para el dinero",
+      "Libertad financiera es libertad de tiempo"
+    ]
+  },
+  "fitness_coach": {
+    "name": "Carla Mendoza",
+    "age": 28,
+    "gender": "female",
+    "personality": {
+      "traits": ["energetic", "motivational", "disciplined", "supportive"],
+      "tone": "enthusiastic",
+      "speaking_style": "dynamic and encouraging"
+    },
+    "background": {
+      "education": "Certificación en Nutrición Deportiva",
+      "experience": "Entrenadora personal por 6 años",
+      "expertise": ["entrenamiento en casa", "nutrición", "pérdida de peso", "tonificación"]
+    },
+    "visual_identity": {
+      "appearance": "Atlética, ropa deportiva moderna, cabello recogido",
+      "color_scheme": ["teal", "black", "white"],
+      "setting": "Gimnasio o espacio de entrenamiento en casa"
+    },
+    "voice_profile": {
+      "reference": "fitness_coach_sample.wav",
+      "characteristics": {
+        "pitch": "medium-high",
+        "pace": "energetic",
+        "accent": "neutral spanish"
+      }
+    },
+    "content_style": {
+      "format": "demonstration with explanation",
+      "hook_style": "challenge or transformation promise",
+      "cta_style": "action-oriented with community building"
+    },
+    "catchphrases": [
+      "Tu cuerpo puede, tu mente decide",
+      "Un día más, un paso más cerca",
+      "Transforma tu cuerpo, transforma tu vida"
+    ]
+  },
+  "tech_reviewer": {
+    "name": "Daniel Torres",
+    "age": 30,
+    "gender": "male",
+    "personality": {
+      "traits": ["analytical", "curious", "straightforward", "detail-oriented"],
+      "tone": "informative",
+      "speaking_style": "clear and technical"
+    },
+    "background": {
+      "education": "Ingeniería en Sistemas",
+      "experience": "Blogger tecnológico por 8 años",
+      "expertise": ["gadgets", "software", "IA", "productividad digital"]
+    },
+    "visual_identity": {
+      "appearance": "Casual-tech, camiseta con diseños minimalistas, gafas",
+      "color_scheme": ["dark gray", "electric blue", "white"],
+      "setting": "Escritorio con múltiples dispositivos o fondo minimalista"
+    },
+    "voice_profile": {
+      "reference": "tech_reviewer_sample.wav",
+      "characteristics": {
+        "pitch": "medium",
+        "pace": "moderate",
+        "accent": "neutral spanish"
+      }
+    },
+    "content_style": {
+      "format": "review with detailed analysis",
+      "hook_style": "surprising feature or comparison",
+      "cta_style": "information-driven with expert opinion"
+    },
+    "catchphrases": [
+      "La tecnología al servicio de tu vida",
+      "Innovación con propósito",
+      "Más allá de las especificaciones"
+    ]
+  },
+  "gaming_streamer": {
+    "name": "Marco 'Pixel' Jiménez",
+    "age": 25,
+    "gender": "male",
+    "personality": {
+      "traits": ["energetic", "humorous", "competitive", "relatable"],
+      "tone": "excited",
+      "speaking_style": "casual and animated"
+    },
+    "background": {
+      "education": "Autodidacta en gaming",
+      "experience": "Streamer por 5 años",
+      "expertise": ["estrategias de juego", "reviews", "noticias gaming", "esports"]
+    },
+    "visual_identity": {
+      "appearance": "Casual con elementos gaming, auriculares, sudadera con logo",
+      "color_scheme": ["purple", "black", "neon green"],
+      "setting": "Setup gaming con luces RGB o fondo de juego animado"
+    },
+    "voice_profile": {
+      "reference": "gaming_streamer_sample.wav",
+      "characteristics": {
+        "pitch": "medium-high",
+        "pace": "fast",
+        "accent": "neutral spanish with gaming slang"
+      }
+    },
+    "content_style": {
+      "format": "gameplay with commentary",
+      "hook_style": "epic moment or challenge",
+      "cta_style": "community-driven with insider benefits"
+    },
+    "catchphrases": [
+      "¡Vamos a dominar este juego!",
+      "Nivel desbloqueado, amigos",
+      "Esto es estrategia pura"
+    ]
+  },
+  "comedy_creator": {
+    "name": "Laura 'Risa' Morales",
+    "age": 27,
+    "gender": "female",
+    "personality": {
+      "traits": ["witty", "expressive", "observational", "spontaneous"],
+      "tone": "playful",
+      "speaking_style": "conversational with comedic timing"
+    },
+    "background": {
+      "education": "Improvisación y comedia",
+      "experience": "Stand-up y creación de contenido por 4 años",
+      "expertise": ["sketches", "parodias", "situaciones cotidianas", "reacciones"]
+    },
+    "visual_identity": {
+      "appearance": "Expresiva, vestuario versátil para personajes, maquillaje distintivo",
+      "color_scheme": ["bright yellow", "red", "white"],
+      "setting": "Variado según sketch o fondo simple con props"
+    },
+    "voice_profile": {
+      "reference": "comedy_creator_sample.wav",
+      "characteristics": {
+        "pitch": "variable",
+        "pace": "dynamic",
+        "accent": "expressive spanish with character voices"
+      }
+    },
+    "content_style": {
+      "format": "sketch or reaction with punchlines",
+      "hook_style": "relatable situation or exaggeration",
+      "cta_style": "humor-driven with community interaction"
+    },
+    "catchphrases": [
+      "¡Y así es como NO se hace!",
+      "La vida es comedia, solo necesitas los ojos para verla",
+      "Ríete ahora, piénsalo después"
+    ]
+  }
+}
