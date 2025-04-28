@@ -13,6 +13,7 @@ import logging
 import time
 import requests
 import google.oauth2.credentials
+import google_auth_oauthlib.flow
 from googleapiclient.discovery import build
 from googleapiclient.http import MediaFileUpload
 from googleapiclient.errors import HttpError
@@ -52,43 +53,126 @@ class YouTubeAdapter:
         self.youtube_analytics = None
         self.quota_usage = 0
         self.quota_reset_time = datetime.now() + timedelta(days=1)
+        self.scopes = [
+            "https://www.googleapis.com/auth/youtube.upload",
+            "https://www.googleapis.com/auth/youtube.readonly",
+            "https://www.googleapis.com/auth/youtube.force-ssl",
+            "https://www.googleapis.com/auth/youtubepartner",
+            "https://www.googleapis.com/auth/youtube",
+            "https://www.googleapis.com/auth/youtube.channel-memberships.creator",
+            "https://www.googleapis.com/auth/youtube.third-party-link.creator",
+            "https://www.googleapis.com/auth/yt-analytics.readonly",
+            "https://www.googleapis.com/auth/yt-analytics-monetary.readonly"
+        ]
         self.initialize_api()
-    
-    # Eliminar el método _load_config ya que ahora usamos get_platform_credentials
     
     def initialize_api(self) -> bool:
         """
-        Inicializa la conexión con la API de YouTube
+        Inicializa la conexión con la API de YouTube usando OAuth 2.0
         
         Returns:
             True si se inicializó correctamente, False en caso contrario
         """
         try:
-            # Verificar si hay credenciales
+            # Verificar si hay configuración
             if not self.config:
                 logger.error("No se encontró configuración para YouTube")
                 return False
             
-            # Crear credenciales OAuth2
-            self.credentials = google.oauth2.credentials.Credentials(
-                token=None,
-                refresh_token=self.config.get('refresh_token'),
-                token_uri="https://oauth2.googleapis.com/token",
-                client_id=self.config.get('client_id'),
-                client_secret=self.config.get('client_secret')
-            )
+            client_id = self.config.get('client_id')
+            client_secret = self.config.get('client_secret')
+            refresh_token = self.config.get('refresh_token')
+            redirect_uri = self.config.get('redirect_uri', 'urn:ietf:wg:oauth:2.0:oob')
             
-            # Construir servicio de YouTube
+            # Validar credenciales básicas
+            if not all([client_id, client_secret]):
+                logger.error("Faltan credenciales OAuth 2.0 esenciales (client_id, client_secret)")
+                return False
+            
+            # Si no hay refresh_token, iniciar flujo de autorización
+            if not refresh_token:
+                logger.info("No se encontró refresh_token, iniciando flujo OAuth 2.0")
+                flow = google_auth_oauthlib.flow.InstalledAppFlow.from_client_config(
+                    {
+                        "installed": {
+                            "client_id": client_id,
+                            "client_secret": client_secret,
+                            "redirect_uris": [redirect_uri],
+                            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+                            "token_uri": "https://oauth2.googleapis.com/token"
+                        }
+                    },
+                    scopes=self.scopes
+                )
+                
+                # Ejecutar flujo de autorización
+                credentials = flow.run_local_server(
+                    host='localhost',
+                    port=8080,
+                    authorization_prompt_message='Por favor, visita esta URL para autorizar la aplicación: {url}',
+                    success_message='La autenticación fue exitosa. Puedes cerrar esta ventana.',
+                    open_browser=True
+                )
+                
+                # Guardar refresh_token para uso futuro
+                self._save_credentials(credentials)
+            else:
+                # Crear objeto de credenciales con refresh_token existente
+                credentials = google.oauth2.credentials.Credentials(
+                    token=None,  # El token se refrescará automáticamente
+                    refresh_token=refresh_token,
+                    token_uri="https://oauth2.googleapis.com/token",
+                    client_id=client_id,
+                    client_secret=client_secret,
+                    scopes=self.scopes
+                )
+            
+            # Verificar y refrescar credenciales si es necesario
+            if credentials.expired and credentials.refresh_token:
+                logger.info("Refrescando token OAuth 2.0")
+                try:
+                    credentials.refresh(requests.Request())
+                    self._save_credentials(credentials)
+                except Exception as refresh_error:
+                    logger.error(f"Error al refrescar token: {str(refresh_error)}")
+                    return False
+            
+            # Asignar credenciales
+            self.credentials = credentials
+            
+            # Construir servicios de YouTube
             self.youtube = build('youtube', 'v3', credentials=self.credentials)
-            
-            # Construir servicio de YouTube Analytics
             self.youtube_analytics = build('youtubeAnalytics', 'v2', credentials=self.credentials)
             
-            logger.info("API de YouTube inicializada correctamente")
+            logger.info("API de YouTube inicializada correctamente con OAuth 2.0")
             return True
         except Exception as e:
-            logger.error(f"Error al inicializar API de YouTube: {str(e)}")
+            logger.error(f"Error al inicializar la API de YouTube: {str(e)}")
             return False
+    
+    def _save_credentials(self, credentials) -> None:
+        """
+        Guarda las credenciales actualizadas de forma segura
+        
+        Args:
+            credentials: Objeto de credenciales OAuth 2.0
+        """
+        try:
+            # Actualizar configuración con nuevo refresh_token
+            self.config['refresh_token'] = credentials.refresh_token
+            # Guardar en el archivo de configuración (asegurarse de que sea seguro)
+            config_file = "config/platforms.json"
+            if os.path.exists(config_file):
+                with open(config_file, 'r') as f:
+                    all_configs = json.load(f)
+                all_configs['youtube'] = self.config
+                with open(config_file, 'w') as f:
+                    json.dump(all_configs, f, indent=2)
+                logger.info("Credenciales actualizadas guardadas correctamente")
+            else:
+                logger.warning("No se pudo guardar el refresh_token: archivo de configuración no encontrado")
+        except Exception as e:
+            logger.error(f"Error al guardar credenciales: {str(e)}")
     
     def _check_quota(self, cost: int = 1) -> bool:
         """
@@ -748,8 +832,7 @@ class YouTubeAdapter:
             day_hour_views = {}
             for row in response.get("rows", []):
                 day_str, hour_str, views, watch_time = row
-                
-                                # Convertir fecha a día de la semana (0-6, lunes-domingo)
+                # Convertir fecha a día de la semana (0-6, lunes-domingo)
                 date_obj = datetime.strptime(day_str, "%Y-%m-%d")
                 day_of_week = date_obj.weekday()
                 hour = int(hour_str)

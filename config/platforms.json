@@ -4,6 +4,7 @@
     "client_id": "YOUR_YOUTUBE_CLIENT_ID",
     "client_secret": "YOUR_YOUTUBE_CLIENT_SECRET",
     "refresh_token": "YOUR_YOUTUBE_REFRESH_TOKEN",
+    "redirect_uri": "urn:ietf:wg:oauth:2.0:oob",
     "channel_id": "YOUR_YOUTUBE_CHANNEL_ID",
     "quota_limit": 10000,
     "quota_reset": "daily",
@@ -30,6 +31,7 @@
     "client_secret": "YOUR_TIKTOK_CLIENT_SECRET",
     "access_token": "YOUR_TIKTOK_ACCESS_TOKEN",
     "open_id": "YOUR_TIKTOK_OPEN_ID",
+    "redirect_uri": "YOUR_TIKTOK_REDIRECT_URI",
     "endpoints": {
       "video_upload": "https://open.tiktokapis.com/v2/post/publish/video/init/",
       "video_info": "https://open.tiktokapis.com/v2/video/query/",

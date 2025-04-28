@@ -1,9 +1,9 @@
 """
 TikTok Adapter - Adaptador para TikTok
 
-Este módulo proporciona una interfaz unificada para interactuar con la API de TikTok,
+Este módulo proporciona una interfaz unificada para interactuar con la TikTok Business API,
 gestionando la publicación de contenido, análisis de métricas, gestión de comentarios,
-y otras funcionalidades específicas de TikTok.
+optimización de hashtags, y otras funcionalidades específicas de TikTok.
 """
 
 import os
@@ -12,12 +12,11 @@ import json
 import logging
 import time
 import requests
-import hmac
-import hashlib
-import base64
-import urllib.parse
 from typing import Dict, List, Any, Optional, Union, Tuple
 from datetime import datetime, timedelta
+
+# Importar el cargador de configuraciones
+from utils.config_loader import get_platform_credentials
 
 # Configurar logging
 logging.basicConfig(
@@ -42,228 +41,227 @@ class TikTokAdapter:
         Args:
             config_path: Ruta al archivo de configuración con credenciales
         """
-        self.config_path = config_path
-        self.config = self._load_config()
+        self.config = get_platform_credentials('tiktok')
         self.access_token = None
         self.token_expiry = None
         self.api_base_url = "https://open.tiktokapis.com/v2"
-        self.rate_limit_remaining = 100  # Valor inicial estimado
+        self.rate_limit_remaining = 100
         self.rate_limit_reset = datetime.now() + timedelta(hours=1)
+        self.scopes = [
+            "video.publish",
+            "video.list",
+            "user.info.basic",
+            "video.insights",
+            "comment.list",
+            "comment.publish",
+            "user.insights"
+        ]
         self.initialize_api()
-    
-    def _load_config(self) -> Dict[str, Any]:
-        """
-        Carga la configuración desde el archivo
-        
-        Returns:
-            Configuración de TikTok
-        """
-        try:
-            with open(self.config_path, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-                return config.get('tiktok', {})
-        except Exception as e:
-            logger.error(f"Error al cargar configuración: {str(e)}")
-            return {}
     
     def initialize_api(self) -> bool:
         """
-        Inicializa la conexión con la API de TikTok
+        Inicializa la conexión con la TikTok Business API usando OAuth 2.0
         
         Returns:
             True si se inicializó correctamente, False en caso contrario
         """
         try:
-            # Verificar si hay credenciales
             if not self.config:
                 logger.error("No se encontró configuración para TikTok")
                 return False
             
-            # Verificar si el token actual es válido
-            if self.access_token and self.token_expiry and datetime.now() < self.token_expiry:
-                logger.info("Token de acceso actual válido hasta " + self.token_expiry.isoformat())
-                return True
-            
-            # Obtener nuevo token de acceso
             client_key = self.config.get('client_key')
             client_secret = self.config.get('client_secret')
+            access_token = self.config.get('access_token')
+            refresh_token = self.config.get('refresh_token')
+            redirect_uri = self.config.get('redirect_uri', 'http://localhost:8080')
             
-            if not client_key or not client_secret:
-                logger.error("Faltan credenciales de cliente en la configuración")
+            if not all([client_key, client_secret]):
+                logger.error("Faltan credenciales OAuth 2.0 esenciales (client_key, client_secret)")
                 return False
             
-            # Obtener token usando credenciales de cliente
-            response = self._get_client_token(client_key, client_secret)
+            if not access_token or not refresh_token:
+                logger.info("No se encontró access_token o refresh_token, iniciando flujo OAuth 2.0")
+                auth_url = (
+                    f"https://www.tiktok.com/v2/auth/authorize/"
+                    f"?client_key={client_key}"
+                    f"&response_type=code"
+                    f"&scope={','.join(self.scopes)}"
+                    f"&redirect_uri={redirect_uri}"
+                    f"&state=auth_state_{int(time.time())}"
+                )
+                
+                logger.info(f"Por favor, visita esta URL para autorizar la aplicación: {auth_url}")
+                auth_code = input("Ingresa el código de autorización recibido: ")
+                
+                token_response = self._exchange_code_for_tokens(auth_code, client_key, client_secret, redirect_uri)
+                if token_response.get("status") != "success":
+                    logger.error(f"Error al obtener tokens: {token_response.get('message')}")
+                    return False
+                
+                self.access_token = token_response["access_token"]
+                self.token_expiry = datetime.now() + timedelta(seconds=token_response["expires_in"])
+                self.config['access_token'] = self.access_token
+                self.config['refresh_token'] = token_response["refresh_token"]
+                self.config['token_expiry'] = self.token_expiry.isoformat()
+                self._save_credentials()
+            else:
+                self.access_token = access_token
+                self.token_expiry = datetime.fromisoformat(self.config.get('token_expiry')) if self.config.get('token_expiry') else datetime.now() + timedelta(hours=1)
+                
+                if datetime.now() >= self.token_expiry:
+                    logger.info("Access token expirado, intentando refrescar")
+                    if not self._refresh_access_token():
+                        return False
             
-            if response.get("status") == "error":
-                logger.error(f"Error al obtener token: {response.get('message')}")
-                return False
-            
-            self.access_token = response.get("access_token")
-            expires_in = response.get("expires_in", 86400)  # Por defecto 24 horas
-            self.token_expiry = datetime.now() + timedelta(seconds=expires_in)
-            
-            logger.info(f"API de TikTok inicializada correctamente, token válido hasta {self.token_expiry.isoformat()}")
+            logger.info("API de TikTok inicializada correctamente con OAuth 2.0")
             return True
         except Exception as e:
-            logger.error(f"Error al inicializar API de TikTok: {str(e)}")
+            logger.error(f"Error al inicializar la API de TikTok: {str(e)}")
             return False
     
-    def _get_client_token(self, client_key: str, client_secret: str) -> Dict[str, Any]:
+    def _exchange_code_for_tokens(self, auth_code: str, client_key: str, client_secret: str, redirect_uri: str) -> Dict[str, Any]:
         """
-        Obtiene un token de acceso usando credenciales de cliente
+        Intercambia el código de autorización por access_token y refresh_token
         
         Args:
-            client_key: Clave de cliente
-            client_secret: Secreto de cliente
+            auth_code: Código de autorización recibido
+            client_key: Clave del cliente
+            client_secret: Secreto del cliente
+            redirect_uri: URI de redirección
             
         Returns:
-            Información del token o error
+            Diccionario con los tokens o error
         """
         try:
-            url = "https://open-api.tiktok.com/oauth/client_token/"
-            
-            # Preparar datos
-            data = {
+            token_url = f"{self.api_base_url}/oauth/token/"
+            payload = {
                 "client_key": client_key,
                 "client_secret": client_secret,
-                "grant_type": "client_credentials"
+                "grant_type": "authorization_code",
+                "code": auth_code,
+                "redirect_uri": redirect_uri
             }
             
-            # Realizar solicitud
-            response = requests.post(url, data=data)
+            response = requests.post(token_url, data=payload)
+            response.raise_for_status()
+            token_data = response.json()
             
-            if response.status_code != 200:
-                return {
-                    "status": "error",
-                    "message": f"Error HTTP {response.status_code}: {response.text}"
-                }
-            
-            result = response.json()
-            data = result.get("data", {})
-            
-            if not data or "access_token" not in data:
-                return {
-                    "status": "error",
-                    "message": f"Respuesta inválida: {result}"
-                }
+            if "access_token" not in token_data:
+                return {"status": "error", "message": token_data.get("error_description", "Error desconocido")}
             
             return {
                 "status": "success",
-                "access_token": data.get("access_token"),
-                "expires_in": data.get("expires_in", 86400)
+                "access_token": token_data["access_token"],
+                "refresh_token": token_data["refresh_token"],
+                "expires_in": token_data["expires_in"],
+                "scope": token_data["scope"]
             }
         except Exception as e:
-            logger.error(f"Error al obtener token de cliente: {str(e)}")
+            logger.error(f"Error al intercambiar código por tokens: {str(e)}")
             return {"status": "error", "message": str(e)}
     
-    def _check_rate_limit(self) -> bool:
+    def _refresh_access_token(self) -> bool:
         """
-        Verifica si hay límite de tasa disponible
+        Refresca el access_token usando el refresh_token
         
         Returns:
-            True si hay límite disponible, False en caso contrario
+            True si se refrescó correctamente, False en caso contrario
         """
-        # Verificar si es tiempo de reiniciar el límite
+        try:
+            refresh_token = self.config.get('refresh_token')
+            if not refresh_token:
+                logger.error("No se encontró refresh_token para refrescar")
+                return False
+            
+            token_url = f"{self.api_base_url}/oauth/token/"
+            payload = {
+                "client_key": self.config.get('client_key'),
+                "client_secret": self.config.get('client_secret'),
+                "grant_type": "refresh_token",
+                "refresh_token": refresh_token
+            }
+            
+            response = requests.post(token_url, data=payload)
+            response.raise_for_status()
+            token_data = response.json()
+            
+            if "access_token" not in token_data:
+                logger.error(f"Error al refrescar token: {token_data.get('error_description', 'Error desconocido')}")
+                return False
+            
+            self.access_token = token_data["access_token"]
+            self.token_expiry = datetime.now() + timedelta(seconds=token_data["expires_in"])
+            self.config['access_token'] = self.access_token
+            self.config['refresh_token'] = token_data["refresh_token"]
+            self.config['token_expiry'] = self.token_expiry.isoformat()
+            self._save_credentials()
+            
+            logger.info("Access token refrescado correctamente")
+            return True
+        except Exception as e:
+            logger.error(f"Error al refrescar access token: {str(e)}")
+            return False
+    
+    def _save_credentials(self) -> None:
+        """
+        Guarda las credenciales actualizadas de forma segura
+        """
+        try:
+            config_file = "config/platforms.json"
+            if os.path.exists(config_file):
+                with open(config_file, 'r') as f:
+                    all_configs = json.load(f)
+                all_configs['tiktok'] = self.config
+                with open(config_file, 'w') as f:
+                    json.dump(all_configs, f, indent=2)
+                logger.info("Credenciales actualizadas guardadas correctamente")
+            else:
+                logger.warning("No se pudo guardar las credenciales: archivo de configuración no encontrado")
+        except Exception as e:
+            logger.error(f"Error al guardar credenciales: {str(e)}")
+    
+    def _check_rate_limit(self, cost: int = 1) -> bool:
+        """
+        Verifica si hay cuota disponible para la operación
+        
+        Args:
+            cost: Costo estimado de la operación
+            
+        Returns:
+            True si hay cuota disponible, False en caso contrario
+        """
         if datetime.now() > self.rate_limit_reset:
-            self.rate_limit_remaining = 100  # Valor estimado
+            self.rate_limit_remaining = 100
             self.rate_limit_reset = datetime.now() + timedelta(hours=1)
             logger.info("Límite de tasa de TikTok API reiniciado")
         
-        # Verificar si hay límite disponible
-        if self.rate_limit_remaining <= 0:
-            logger.warning(f"Límite de tasa alcanzado, se reiniciará en {(self.rate_limit_reset - datetime.now()).total_seconds()} segundos")
+        if self.rate_limit_remaining < cost:
+            logger.warning(f"Límite de tasa alcanzado: {self.rate_limit_remaining}/100")
             return False
         
-        # Decrementar límite
-        self.rate_limit_remaining -= 1
+        self.rate_limit_remaining -= cost
         return True
     
-    def _make_api_request(self, method: str, endpoint: str, params: Dict = None, 
-                         data: Dict = None, files: Dict = None) -> Dict[str, Any]:
+    def _update_rate_limit(self, response: requests.Response) -> None:
         """
-        Realiza una solicitud a la API de TikTok
+        Actualiza el estado del límite de tasa basado en los encabezados de la respuesta
         
         Args:
-            method: Método HTTP (GET, POST, etc.)
-            endpoint: Endpoint de la API
-            params: Parámetros de consulta
-            data: Datos para enviar en el cuerpo
-            files: Archivos para subir
-            
-        Returns:
-            Respuesta de la API o error
+            response: Respuesta HTTP de la API
         """
-        if not self._check_rate_limit():
-            return {"status": "error", "message": "Límite de tasa alcanzado"}
-        
         try:
-            # Verificar token
-            if not self.access_token or (self.token_expiry and datetime.now() >= self.token_expiry):
-                if not self.initialize_api():
-                    return {"status": "error", "message": "No se pudo inicializar la API"}
-            
-            # Preparar URL
-            url = f"{self.api_base_url}/{endpoint.lstrip('/')}"
-            
-            # Preparar headers
-            headers = {
-                "Authorization": f"Bearer {self.access_token}",
-                "Content-Type": "application/json"
-            }
-            
-            # Realizar solicitud
-            if method.upper() == "GET":
-                response = requests.get(url, headers=headers, params=params)
-            elif method.upper() == "POST":
-                if files:
-                    # Si hay archivos, no usar Content-Type: application/json
-                    headers.pop("Content-Type", None)
-                    response = requests.post(url, headers=headers, data=data, files=files)
-                else:
-                    response = requests.post(url, headers=headers, json=data)
-            elif method.upper() == "PUT":
-                response = requests.put(url, headers=headers, json=data)
-            elif method.upper() == "DELETE":
-                response = requests.delete(url, headers=headers, params=params)
-            else:
-                return {"status": "error", "message": f"Método no soportado: {method}"}
-            
-            # Actualizar límites de tasa si están en los headers
-            if "X-RateLimit-Remaining" in response.headers:
-                self.rate_limit_remaining = int(response.headers.get("X-RateLimit-Remaining", "0"))
-            if "X-RateLimit-Reset" in response.headers:
-                reset_time = int(response.headers.get("X-RateLimit-Reset", "0"))
-                self.rate_limit_reset = datetime.fromtimestamp(reset_time)
-            
-            # Procesar respuesta
-            if response.status_code >= 400:
-                logger.error(f"Error HTTP {response.status_code}: {response.text}")
-                return {
-                    "status": "error",
-                    "code": response.status_code,
-                    "message": response.text
-                }
-            
-            # Intentar parsear como JSON
-            try:
-                result = response.json()
-                return {
-                    "status": "success",
-                    "data": result
-                }
-            except ValueError:
-                # Si no es JSON, devolver texto
-                return {
-                    "status": "success",
-                    "data": response.text
-                }
+            # Nota: TikTok API no proporciona encabezados estándar de rate limit; esto es un placeholder
+            remaining = response.headers.get('X-Rate-Limit-Remaining', self.rate_limit_remaining)
+            reset_time = response.headers.get('X-Rate-Limit-Reset')
+            self.rate_limit_remaining = int(remaining)
+            if reset_time:
+                self.rate_limit_reset = datetime.fromtimestamp(float(reset_time))
         except Exception as e:
-            logger.error(f"Error en solicitud a API de TikTok: {str(e)}")
-            return {"status": "error", "message": str(e)}
-    
-    def upload_video(self, video_path: str, title: str, description: str = None, 
-                    tags: List[str] = None, privacy_level: str = "PUBLIC",
+            logger.warning(f"Error al actualizar límite de tasa: {str(e)}")
+
+    def upload_video(self, video_path: str, title: str, description: str, 
+                    tags: List[str] = None, privacy_level: str = "PUBLIC", 
                     disable_comments: bool = False, disable_duet: bool = False,
                     disable_stitch: bool = False) -> Dict[str, Any]:
         """
@@ -273,97 +271,83 @@ class TikTokAdapter:
             video_path: Ruta al archivo de video
             title: Título del video
             description: Descripción del video
-            tags: Lista de hashtags
-            privacy_level: Nivel de privacidad (PUBLIC, SELF_ONLY, MUTUAL_FOLLOW_FRIENDS)
-            disable_comments: Si se deshabilitan los comentarios
-            disable_duet: Si se deshabilita el dueto
-            disable_stitch: Si se deshabilita el stitch
+            tags: Lista de etiquetas
+            privacy_level: Nivel de privacidad (PUBLIC, MUTUAL_FOLLOW_FRIENDS, FOLLOWER_OF_CREATOR, SELF_ONLY)
+            disable_comments: Deshabilitar comentarios
+            disable_duet: Deshabilitar duetos
+            disable_stitch: Deshabilitar stitch
             
         Returns:
             Información del video subido o error
         """
-        if not self._check_rate_limit():
+        if not self._check_rate_limit(cost=10):
             return {"status": "error", "message": "Límite de tasa alcanzado"}
         
         try:
             if not os.path.exists(video_path):
                 return {"status": "error", "message": f"Archivo no encontrado: {video_path}"}
             
-            # Preparar hashtags
-            hashtags = []
-            if tags:
-                for tag in tags:
-                    # Asegurar que cada tag tenga el formato correcto
-                    if not tag.startswith("#"):
-                        tag = f"#{tag}"
-                    hashtags.append(tag)
+            if tags is None:
+                tags = []
             
-            # Construir descripción con hashtags
-            full_description = title
-            if description:
-                full_description = f"{title}\n\n{description}"
+            headers = {
+                "Authorization": f"Bearer {self.access_token}",
+                "Content-Type": "application/json"
+            }
             
-            if hashtags:
-                hashtag_text = " ".join(hashtags)
-                full_description = f"{full_description}\n\n{hashtag_text}"
+            init_response = requests.post(
+                f"{self.api_base_url}/video/init/",
+                headers=headers,
+                json={}
+            )
+            init_response.raise_for_status()
+            init_data = init_response.json()
             
-            # Paso 1: Iniciar la carga
-            init_response = self._make_api_request(
-                "POST",
-                "/video/init",
-                data={
-                    "post_info": {
-                        "title": title,
-                        "description": full_description,
-                        "privacy_level": privacy_level,
-                        "disable_comment": disable_comments,
-                        "disable_duet": disable_duet,
-                        "disable_stitch": disable_stitch
-                    }
+            if "upload_url" not in init_data.get("data", {}):
+                return {"status": "error", "message": "No se pudo obtener URL de carga"}
+            
+            upload_url = init_data["data"]["upload_url"]
+            
+            with open(video_path, 'rb') as video_file:
+                files = {"video": (os.path.basename(video_path), video_file, "video/mp4")}
+                upload_response = requests.put(upload_url, files=files)
+                upload_response.raise_for_status()
+            
+            publish_data = {
+                "post_info": {
+                    "title": title,
+                    "description": description,
+                    "privacy_level": privacy_level,
+                    "disable_comment": disable_comments,
+                    "disable_duet": disable_duet,
+                    "disable_stitch": disable_stitch,
+                    "video_tags": tags
                 }
+            }
+            
+            publish_response = requests.post(
+                f"{self.api_base_url}/video/publish/",
+                headers=headers,
+                json=publish_data
             )
+            publish_response.raise_for_status()
+            publish_data = publish_response.json()
             
-            if init_response.get("status") != "success":
-                return init_response
-            
-            upload_id = init_response.get("data", {}).get("upload_id")
-            if not upload_id:
-                return {"status": "error", "message": "No se pudo obtener ID de carga"}
-            
-            # Paso 2: Subir el video
-            with open(video_path, "rb") as video_file:
-                upload_response = self._make_api_request(
-                    "POST",
-                    "/video/upload",
-                    data={"upload_id": upload_id},
-                    files={"video": video_file}
-                )
-            
-            if upload_response.get("status") != "success":
-                return upload_response
-            
-            # Paso 3: Finalizar la carga
-            finish_response = self._make_api_request(
-                "POST",
-                "/video/publish",
-                data={"upload_id": upload_id}
-            )
-            
-            if finish_response.get("status") != "success":
-                return finish_response
-            
-            # Obtener información del video publicado
-            video_id = finish_response.get("data", {}).get("video_id")
+            video_id = publish_data.get("data", {}).get("video_id")
+            if not video_id:
+                return {"status": "error", "message": "No se pudo obtener ID del video"}
             
             logger.info(f"Video subido correctamente: {video_id}")
+            self._update_rate_limit(publish_response)
+            
             return {
                 "status": "success",
                 "video_id": video_id,
-                "title": title,
-                "description": full_description,
-                "privacy_level": privacy_level,
-                "timestamp": datetime.now().isoformat()
+                "url": f"https://www.tiktok.com/@{self.config.get('open_id')}/video/{video_id}"
             }
+        except requests.HTTPError as e:
+            logger.error(f"Error de API al subir video: {str(e)}")
+            return {"status": "error", "message": str(e)}
         except Exception as e:
             logger.error(f"Error al subir video: {str(e)}")
             return {"status": "error", "message": str(e)}
@@ -378,37 +362,42 @@ class TikTokAdapter:
         Returns:
             Métricas del video
         """
-        if not self._check_rate_limit():
+        if not self._check_rate_limit(cost=2):
             return {"status": "error", "message": "Límite de tasa alcanzado"}
         
         try:
-            response = self._make_api_request(
-                "GET",
-                "/video/info",
-                params={"video_id": video_id}
+            headers = {"Authorization": f"Bearer {self.access_token}"}
+            response = requests.get(
+                f"{self.api_base_url}/video/list/?fields=video_id,title,description,create_time,view_count,like_count,comment_count,share_count",
+                headers=headers,
+                params={"video_ids": [video_id]}
             )
+            response.raise_for_status()
+            data = response.json()
             
-            if response.get("status") != "success":
-                return response
+            self._update_rate_limit(response)
             
-            video_info = response.get("data", {}).get("video_info", {})
+            if not data.get("data", {}).get("videos"):
+                return {"status": "error", "message": "Video no encontrado"}
             
-            # Extraer métricas
+            video_info = data["data"]["videos"][0]
+            
             metrics = {
-                "video_id": video_id,
+                "video_id": video_info.get("video_id", ""),
                 "title": video_info.get("title", ""),
                 "description": video_info.get("description", ""),
-                "create_time": video_info.get("create_time", ""),
-                "cover_image_url": video_info.get("cover_image_url", ""),
-                "share_url": video_info.get("share_url", ""),
-                "view_count": video_info.get("statistics", {}).get("view_count", 0),
-                "like_count": video_info.get("statistics", {}).get("like_count", 0),
-                "comment_count": video_info.get("statistics", {}).get("comment_count", 0),
-                "share_count": video_info.get("statistics", {}).get("share_count", 0),
+                "create_time": datetime.fromtimestamp(video_info.get("create_time", 0)).isoformat(),
+                "views": video_info.get("view_count", 0),
+                "likes": video_info.get("like_count", 0),
+                "comments": video_info.get("comment_count", 0),
+                "shares": video_info.get("share_count", 0),
                 "timestamp": datetime.now().isoformat()
             }
             
             return {"status": "success", "metrics": metrics}
+        except requests.HTTPError as e:
+            logger.error(f"Error de API al obtener métricas: {str(e)}")
+            return {"status": "error", "message": str(e)}
         except Exception as e:
             logger.error(f"Error al obtener métricas: {str(e)}")
             return {"status": "error", "message": str(e)}
@@ -426,44 +415,42 @@ class TikTokAdapter:
         Returns:
             Analíticas avanzadas del video
         """
-        if not self._check_rate_limit():
+        if not self._check_rate_limit(cost=5):
             return {"status": "error", "message": "Límite de tasa alcanzado"}
         
         try:
-            # Configurar fechas
             if not end_date:
                 end_date = datetime.now().strftime("%Y-%m-%d")
             if not start_date:
                 start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
             
-            response = self._make_api_request(
-                "GET",
-                "/video/analytics",
+            headers = {"Authorization": f"Bearer {self.access_token}"}
+            response = requests.get(
+                f"{self.api_base_url}/video/insights/?video_id={video_id}",
+                headers=headers,
                 params={
-                    "video_id": video_id,
                     "start_date": start_date,
                     "end_date": end_date,
-                    "metrics": "views,likes,comments,shares,profile_views,follows"
+                    "fields": "views,likes,comments,shares,average_watch_time,reach,engagement_rate"
                 }
             )
+            response.raise_for_status()
+            data = response.json()
             
-            if response.get("status") != "success":
-                return response
+            self._update_rate_limit(response)
             
-            analytics_data = response.get("data", {}).get("analytics", {})
-            
-            # Procesar resultados
             analytics = {
                 "video_id": video_id,
                 "start_date": start_date,
                 "end_date": end_date,
-                "metrics": analytics_data.get("metrics", {}),
-                "daily_data": analytics_data.get("daily_data", []),
-                "audience": analytics_data.get("audience", {}),
+                "data": data.get("data", {}).get("insights", {}),
                 "timestamp": datetime.now().isoformat()
             }
             
             return {"status": "success", "analytics": analytics}
+        except requests.HTTPError as e:
+            logger.error(f"Error de API al obtener analíticas: {str(e)}")
+            return {"status": "error", "message": str(e)}
         except Exception as e:
             logger.error(f"Error al obtener analíticas: {str(e)}")
             return {"status": "error", "message": str(e)}
@@ -479,197 +466,237 @@ class TikTokAdapter:
         Returns:
             Lista de comentarios
         """
-        if not self._check_rate_limit():
+        if not self._check_rate_limit(cost=2):
             return {"status": "error", "message": "Límite de tasa alcanzado"}
         
         try:
-            response = self._make_api_request(
-                "GET",
-                "/video/comments",
-                params={
-                    "video_id": video_id,
-                    "limit": min(max_results, 100)
-                }
+            headers = {"Authorization": f"Bearer {self.access_token}"}
+            response = requests.get(
+                f"{self.api_base_url}/comment/list/?video_id={video_id}&max_count={min(max_results, 100)}",
+                headers=headers
             )
+            response.raise_for_status()
+            data = response.json()
             
-            if response.get("status") != "success":
-                return response
+            self._update_rate_limit(response)
             
-            comments_data = response.get("data", {}).get("comments", [])
-            
-            # Procesar comentarios
             comments = []
-            for comment in comments_data:
+            for comment in data.get("data", {}).get("comments", []):
                 comments.append({
                     "comment_id": comment.get("id", ""),
+                    "author": comment.get("user", {}).get("nickname", ""),
+                    "author_id": comment.get("user", {}).get("unique_id", ""),
                     "text": comment.get("text", ""),
-                    "create_time": comment.get("create_time", ""),
                     "like_count": comment.get("like_count", 0),
-                    "user": {
-                        "id": comment.get("user", {}).get("id", ""),
-                        "username": comment.get("user", {}).get("username", ""),
-                        "display_name": comment.get("user", {}).get("display_name", "")
-                    }
+                    "create_time": datetime.fromtimestamp(comment.get("create_time", 0)).isoformat(),
+                    "reply_count": comment.get("reply_count", 0)
                 })
             
             return {"status": "success", "comments": comments}
+        except requests.HTTPError as e:
+            logger.error(f"Error de API al obtener comentarios: {str(e)}")
+            return {"status": "error", "message": str(e)}
         except Exception as e:
             logger.error(f"Error al obtener comentarios: {str(e)}")
             return {"status": "error", "message": str(e)}
     
-    def reply_to_comment(self, video_id: str, comment_id: str, text: str) -> Dict[str, Any]:
+    def reply_to_comment(self, comment_id: str, text: str) -> Dict[str, Any]:
         """
         Responde a un comentario
         
         Args:
-            video_id: ID del video
             comment_id: ID del comentario
             text: Texto de la respuesta
             
         Returns:
             Resultado de la operación
         """
-        if not self._check_rate_limit():
+        if not self._check_rate_limit(cost=5):
             return {"status": "error", "message": "Límite de tasa alcanzado"}
         
         try:
-            response = self._make_api_request(
-                "POST",
-                "/video/comment",
-                data={
-                    "video_id": video_id,
-                    "comment_id": comment_id,  # Si se proporciona, es una respuesta
+            headers = {"Authorization": f"Bearer {self.access_token}"}
+            response = requests.post(
+                f"{self.api_base_url}/comment/reply/",
+                headers=headers,
+                json={
+                    "comment_id": comment_id,
                     "text": text
                 }
             )
+            response.raise_for_status()
+            data = response.json()
             
-            if response.get("status") != "success":
-                return response
+            self._update_rate_limit(response)
             
-            comment_data = response.get("data", {}).get("comment", {})
-            
+            logger.info(f"Respuesta enviada al comentario {comment_id}")
             return {
                 "status": "success",
-                "comment_id": comment_data.get("id", ""),
-                "text": comment_data.get("text", ""),
-                "create_time": comment_data.get("create_time", "")
+                "comment_id": data.get("data", {}).get("reply_id", ""),
+                "text": text
             }
+        except requests.HTTPError as e:
+            logger.error(f"Error de API al responder comentario: {str(e)}")
+            return {"status": "error", "message": str(e)}
         except Exception as e:
             logger.error(f"Error al responder comentario: {str(e)}")
             return {"status": "error", "message": str(e)}
     
-    def get_trending_videos(self, category: str = None, max_results: int = 50) -> Dict[str, Any]:
+    def get_trending_videos(self, region_code: str = "ES", max_results: int = 50) -> Dict[str, Any]:
         """
         Obtiene videos en tendencia
         
         Args:
-            category: Categoría de tendencias (opcional)
+            region_code: Código de región (ES, US, MX, etc.)
             max_results: Número máximo de resultados
             
         Returns:
             Lista de videos en tendencia
         """
-        if not self._check_rate_limit():
+        if not self._check_rate_limit(cost=5):
             return {"status": "error", "message": "Límite de tasa alcanzado"}
         
         try:
-            params = {
-                "limit": min(max_results, 50)
-            }
-            
-            if category:
-                params["category"] = category
-            
-            response = self._make_api_request(
-                "GET",
-                "/trending/videos",
-                params=params
+            headers = {"Authorization": f"Bearer {self.access_token}"}
+            response = requests.get(
+                f"{self.api_base_url}/video/query/?fields=video_id,title,description,create_time,view_count,like_count,cover_image_url",
+                headers=headers,
+                params={
+                    "region_code": region_code,
+                    "max_count": min(max_results, 50)
+                }
             )
+            response.raise_for_status()
+            data = response.json()
             
-            if response.get("status") != "success":
-                return response
+            self._update_rate_limit(response)
             
-            videos_data = response.get("data", {}).get("videos", [])
-            
-            # Procesar resultados
             trending_videos = []
-            for video in videos_data:
+            for video in data.get("data", {}).get("videos", []):
                 trending_videos.append({
-                    "video_id": video.get("id", ""),
+                    "video_id": video.get("video_id", ""),
                     "title": video.get("title", ""),
                     "description": video.get("description", ""),
-                    "create_time": video.get("create_time", ""),
-                    "cover_image_url": video.get("cover_image_url", ""),
-                    "share_url": video.get("share_url", ""),
-                    "view_count": video.get("statistics", {}).get("view_count", 0),
-                    "like_count": video.get("statistics", {}).get("like_count", 0),
-                    "comment_count": video.get("statistics", {}).get("comment_count", 0),
-                    "share_count": video.get("statistics", {}).get("share_count", 0),
-                    "user": {
-                        "id": video.get("user", {}).get("id", ""),
-                        "username": video.get("user", {}).get("username", ""),
-                        "display_name": video.get("user", {}).get("display_name", "")
-                    }
+                    "create_time": datetime.fromtimestamp(video.get("create_time", 0)).isoformat(),
+                    "views": video.get("view_count", 0),
+                    "likes": video.get("like_count", 0),
+                    "thumbnail": video.get("cover_image_url", "")
                 })
             
             return {"status": "success", "trending_videos": trending_videos}
+        except requests.HTTPError as e:
+            logger.error(f"Error de API al obtener tendencias: {str(e)}")
+            return {"status": "error", "message": str(e)}
         except Exception as e:
-            logger.error(f"Error al obtener videos en tendencia: {str(e)}")
+            logger.error(f"Error al obtener tendencias: {str(e)}")
             return {"status": "error", "message": str(e)}
     
-    def search_videos(self, query: str, max_results: int = 50) -> Dict[str, Any]:
+    def search_videos(self, query: str, max_results: int = 50, region_code: str = "ES") -> Dict[str, Any]:
         """
         Busca videos en TikTok
         
         Args:
             query: Término de búsqueda
             max_results: Número máximo de resultados
+            region_code: Código de región
             
         Returns:
             Lista de videos encontrados
         """
-        if not self._check_rate_limit():
+        if not self._check_rate_limit(cost=5):
             return {"status": "error", "message": "Límite de tasa alcanzado"}
         
         try:
-            response = self._make_api_request(
-                "GET",
-                "/search/videos",
+            headers = {"Authorization": f"Bearer {self.access_token}"}
+            response = requests.get(
+                f"{self.api_base_url}/video/search/?fields=video_id,title,description,create_time,view_count,cover_image_url",
+                headers=headers,
                 params={
                     "query": query,
-                    "limit": min(max_results, 50)
+                    "max_count": min(max_results, 50),
+                    "region_code": region_code
                 }
             )
+            response.raise_for_status()
+            data = response.json()
             
-            if response.get("status") != "success":
-                return response
+            self._update_rate_limit(response)
             
-            videos_data = response.get("data", {}).get("videos", [])
-            
-            # Procesar resultados
             search_results = []
-            for video in videos_data:
+            for video in data.get("data", {}).get("videos", []):
                 search_results.append({
-                    "video_id": video.get("id", ""),
+                    "video_id": video.get("video_id", ""),
                     "title": video.get("title", ""),
                     "description": video.get("description", ""),
-                    "create_time": video.get("create_time", ""),
-                    "cover_image_url": video.get("cover_image_url", ""),
-                    "share_url": video.get("share_url", ""),
-                    "view_count": video.get("statistics", {}).get("view_count", 0),
-                    "like_count": video.get("statistics", {}).get("like_count", 0),
-                    "comment_count": video.get("statistics", {}).get("comment_count", 0),
-                    "share_count": video.get("statistics", {}).get("share_count", 0),
-                    "user": {
-                        "id": video.get("user", {}).get("id", ""),
-                        "username": video.get("user", {}).get("username", ""),
-                        "display_name": video.get("user", {}).get("display_name", "")
-                    }
+                    "create_time": datetime.fromtimestamp(video.get("create_time", 0)).isoformat(),
+                    "views": video.get("view_count", 0),
+                    "thumbnail": video.get("cover_image_url", "")
                 })
             
             return {"status": "success", "search_results": search_results}
+        except requests.HTTPError as e:
+            logger.error(f"Error de API al buscar videos: {str(e)}")
+            return {"status": "error", "message": str(e)}
         except Exception as e:
             logger.error(f"Error al buscar videos: {str(e)}")
+            return {"status": "error", "message": str(e)}
+    
+    def update_video(self, video_id: str, description: str = None, privacy_level: str = None,
+                    disable_comments: bool = None, disable_duet: bool = None,
+                    disable_stitch: bool = None) -> Dict[str, Any]:
+        """
+        Actualiza metadatos de un video
+        
+        Args:
+            video_id: ID del video
+            description: Nueva descripción (opcional)
+            privacy_level: Nuevo nivel de privacidad (opcional)
+            disable_comments: Deshabilitar comentarios (opcional)
+            disable_duet: Deshabilitar duetos (opcional)
+            disable_stitch: Deshabilitar stitch (opcional)
+            
+        Returns:
+            Resultado de la operación
+        """
+        if not self._check_rate_limit(cost=5):
+            return {"status": "error", "message": "Límite de tasa alcanzado"}
+        
+        try:
+            headers = {"Authorization": f"Bearer {self.access_token}"}
+            update_data = {}
+            if description is not None:
+                update_data["description"] = description
+            if privacy_level is not None:
+                update_data["privacy_level"] = privacy_level
+            if disable_comments is not None:
+                update_data["disable_comment"] = disable_comments
+            if disable_duet is not None:
+                update_data["disable_duet"] = disable_duet
+            if disable_stitch is not None:
+                update_data["disable_stitch"] = disable_stitch
+            
+            if not update_data:
+                return {"status": "error", "message": "No se proporcionaron datos para actualizar"}
+            
+            response = requests.post(
+                f"{self.api_base_url}/video/update/",
+                headers=headers,
+                json={
+                    "video_id": video_id,
+                    "post_info": update_data
+                }
+            )
+            response.raise_for_status()
+            
+            self._update_rate_limit(response)
+            
+            logger.info(f"Video {video_id} actualizado correctamente")
+            return {"status": "success", "message": "Video actualizado correctamente"}
+        except requests.HTTPError as e:
+            logger.error(f"Error de API al actualizar video: {str(e)}")
+            return {"status": "error", "message": str(e)}
+        except Exception as e:
+            logger.error(f"Error al actualizar video: {str(e)}")
             return {"status": "error", "message": str(e)}
     
     def delete_video(self, video_id: str) -> Dict[str, Any]:
@@ -682,61 +709,65 @@ class TikTokAdapter:
         Returns:
             Resultado de la operación
         """
-        if not self._check_rate_limit():
+        if not self._check_rate_limit(cost=5):
             return {"status": "error", "message": "Límite de tasa alcanzado"}
         
         try:
-            response = self._make_api_request(
-                "DELETE",
-                "/video",
-                params={"video_id": video_id}
+            headers = {"Authorization": f"Bearer {self.access_token}"}
+            response = requests.post(
+                f"{self.api_base_url}/video/delete/",
+                headers=headers,
+                json={"video_id": video_id}
             )
+            response.raise_for_status()
             
-            if response.get("status") != "success":
-                return response
+            self._update_rate_limit(response)
             
             logger.info(f"Video {video_id} eliminado correctamente")
             return {"status": "success", "message": "Video eliminado correctamente"}
+        except requests.HTTPError as e:
+            logger.error(f"Error de API al eliminar video: {str(e)}")
+            return {"status": "error", "message": str(e)}
         except Exception as e:
             logger.error(f"Error al eliminar video: {str(e)}")
             return {"status": "error", "message": str(e)}
     
     def get_user_info(self) -> Dict[str, Any]:
         """
-        Obtiene información del usuario autenticado
+        Obtiene información del usuario
         
         Returns:
             Información del usuario
         """
-        if not self._check_rate_limit():
+        if not self._check_rate_limit(cost=1):
             return {"status": "error", "message": "Límite de tasa alcanzado"}
         
         try:
-            response = self._make_api_request(
-                "GET",
-                "/user/info"
+            headers = {"Authorization": f"Bearer {self.access_token}"}
+            response = requests.get(
+                f"{self.api_base_url}/user/info/?fields=open_id,nickname,avatar_url,follower_count,following_count,video_count",
+                headers=headers
             )
+            response.raise_for_status()
+            data = response.json()
             
-            if response.get("status") != "success":
-                return response
+            self._update_rate_limit(response)
             
-            user_data = response.get("data", {}).get("user", {})
-            
-            # Extraer información
+            user_info = data.get("data", {}).get("user", {})
             info = {
-                "user_id": user_data.get("id", ""),
-                "username": user_data.get("username", ""),
-                "display_name": user_data.get("display_name", ""),
-                "bio": user_data.get("bio", ""),
-                "avatar_url": user_data.get("avatar_url", ""),
-                "follower_count": user_data.get("follower_count", 0),
-                "following_count": user_data.get("following_count", 0),
-                "video_count": user_data.get("video_count", 0),
-                "like_count": user_data.get("like_count", 0),
+                "open_id": user_info.get("open_id", ""),
+                "nickname": user_info.get("nickname", ""),
+                "avatar_url": user_info.get("avatar_url", ""),
+                "follower_count": user_info.get("follower_count", 0),
+                "following_count": user_info.get("following_count", 0),
+                "video_count": user_info.get("video_count", 0),
                 "timestamp": datetime.now().isoformat()
             }
             
             return {"status": "success", "user_info": info}
+        except requests.HTTPError as e:
+            logger.error(f"Error de API al obtener información del usuario: {str(e)}")
+            return {"status": "error", "message": str(e)}
         except Exception as e:
             logger.error(f"Error al obtener información del usuario: {str(e)}")
             return {"status": "error", "message": str(e)}
@@ -748,89 +779,75 @@ class TikTokAdapter:
         Returns:
             Hora y día óptimos para publicar
         """
+        if not self._check_rate_limit(cost=5):
+            return {"status": "error", "message": "Límite de tasa alcanzado"}
+        
         try:
-            # Obtener analíticas de los últimos 30 días
             end_date = datetime.now().strftime("%Y-%m-%d")
-            start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+            start_date = (datetime.now() - timedelta(days=90)).strftime("%Y-%m-%d")
             
-            response = self._make_api_request(
-                "GET",
-                "/user/analytics",
+            headers = {"Authorization": f"Bearer {self.access_token}"}
+            response = requests.get(
+                f"{self.api_base_url}/user/insights/?fields=views,engagement_rate",
+                headers=headers,
                 params={
                     "start_date": start_date,
                     "end_date": end_date,
-                    "metrics": "views,profile_views,follows",
                     "dimensions": "day,hour"
                 }
             )
+            response.raise_for_status()
+            data = response.json()
             
-            if response.get("status") != "success" or not response.get("data", {}).get("analytics", {}).get("daily_data"):
+            self._update_rate_limit(response)
+            
+            if not data.get("data", {}).get("insights"):
                 return {
                     "status": "warning",
                     "message": "No hay suficientes datos para determinar el momento óptimo",
                     "recommendation": {
                         "day": 5,  # Viernes
-                        "hour": 20  # 8 PM
+                        "hour": 19  # 7 PM
                     }
                 }
             
-            analytics_data = response.get("data", {}).get("analytics", {})
-            daily_data = analytics_data.get("daily_data", [])
-            
-            # Procesar datos para encontrar el mejor momento
-            day_hour_views = {}
-            for day_data in daily_data:
-                date_str = day_data.get("date")
-                hourly_data = day_data.get("hourly_data", [])
+            day_hour_metrics = {}
+            for insight in data["data"]["insights"]:
+                day_str = insight.get("day")
+                hour = int(insight.get("hour", 0))
+                views = insight.get("views", 0)
+                engagement = insight.get("engagement_rate", 0)
                 
-                # Convertir fecha a día de la semana (0-6, lunes-domingo)
-                date_obj = datetime.strptime(date_str, "%Y-%m-%d")
+                date_obj = datetime.strptime(day_str, "%Y-%m-%d")
                 day_of_week = date_obj.weekday()
                 
-                for hour_data in hourly_data:
-                    hour = hour_data.get("hour")
-                    views = hour_data.get("views", 0)
-                    profile_views = hour_data.get("profile_views", 0)
-                    follows = hour_data.get("follows", 0)
-                    
-                                        # Acumular métricas por día y hora
-                    key = (day_of_week, hour)
-                    if key not in day_hour_views:
-                        day_hour_views[key] = {"views": 0, "profile_views": 0, "follows": 0, "count": 0}
-                    
-                    day_hour_views[key]["views"] += views
-                    day_hour_views[key]["profile_views"] += profile_views
-                    day_hour_views[key]["follows"] += follows
-                    day_hour_views[key]["count"] += 1
+                key = (day_of_week, hour)
+                if key not in day_hour_metrics:
+                    day_hour_metrics[key] = {"views": 0, "engagement": 0, "count": 0}
+                
+                day_hour_metrics[key]["views"] += views
+                day_hour_metrics[key]["engagement"] += engagement
+                day_hour_metrics[key]["count"] += 1
             
-            # Calcular promedios y encontrar el mejor momento
             best_time = None
             best_score = 0
             
-            for (day, hour), data in day_hour_views.items():
-                # Calcular promedio de métricas
-                avg_views = data["views"] / data["count"]
-                avg_profile_views = data["profile_views"] / data["count"]
-                avg_follows = data["follows"] / data["count"]
+            for (day, hour), metrics in day_hour_metrics.items():
+                avg_views = metrics["views"] / metrics["count"]
+                avg_engagement = metrics["engagement"] / metrics["count"]
                 
-                # Calcular puntuación combinada (40% vistas, 30% visitas al perfil, 30% nuevos seguidores)
-                # Normalizar valores para que estén en escalas comparables
-                max_views = max([d["views"] / d["count"] for d in day_hour_views.values()] or [1])
-                max_profile_views = max([d["profile_views"] / d["count"] for d in day_hour_views.values()] or [1])
-                max_follows = max([d["follows"] / d["count"] for d in day_hour_views.values()] or [1])
+                max_views = max([m["views"] / m["count"] for m in day_hour_metrics.values()])
+                max_engagement = max([m["engagement"] / m["count"] for m in day_hour_metrics.values()])
                 
                 norm_views = avg_views / max_views if max_views > 0 else 0
-                norm_profile_views = avg_profile_views / max_profile_views if max_profile_views > 0 else 0
-                norm_follows = avg_follows / max_follows if max_follows > 0 else 0
+                norm_engagement = avg_engagement / max_engagement if max_engagement > 0 else 0
                 
-                score = (norm_views * 0.4) + (norm_profile_views * 0.3) + (norm_follows * 0.3)
+                score = (norm_views * 0.5) + (norm_engagement * 0.5)
                 
-                # Actualizar mejor momento si la puntuación es mayor
                 if score > best_score:
                     best_score = score
                     best_time = (day, hour)
             
-            # Mapear día de la semana a nombre
             day_names = ["Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado", "Domingo"]
             
             if best_time:
@@ -847,29 +864,194 @@ class TikTokAdapter:
                     "message": f"El mejor momento para publicar es {day_names[best_day]} a las {best_hour}:00"
                 }
             else:
-                # Valor predeterminado si no se puede determinar
                 return {
                     "status": "warning",
                     "message": "No se pudo determinar el momento óptimo con los datos disponibles",
                     "recommendation": {
                         "day": 5,  # Viernes
                         "day_name": "Viernes",
-                        "hour": 20,  # 8 PM
-                        "hour_formatted": "20:00"
+                        "hour": 19,  # 7 PM
+                        "hour_formatted": "19:00"
                     }
                 }
+        except requests.HTTPError as e:
+            logger.error(f"Error de API al obtener datos para tiempo óptimo: {str(e)}")
+            return {
+                "status": "error",
+                "message": str(e),
+                "recommendation": {
+                    "day": 5,
+                    "day_name": "Viernes",
+                    "hour": 19,
+                    "hour_formatted": "19:00"
+                }
+            }
         except Exception as e:
             logger.error(f"Error al determinar tiempo óptimo: {str(e)}")
             return {
-                "status": "error", 
+                "status": "error",
                 "message": str(e),
                 "recommendation": {
-                    "day": 5,  # Viernes
+                    "day": 5,
                     "day_name": "Viernes",
-                    "hour": 20,  # 8 PM
-                    "hour_formatted": "20:00"
+                    "hour": 19,
+                    "hour_formatted": "19:00"
                 }
             }
+    
+    def manage_hashtags(self, video_id: str = None, region_code: str = "ES") -> Dict[str, Any]:
+        """
+        Gestiona y optimiza hashtags para un video o devuelve hashtags en tendencia
+        
+        Args:
+            video_id: ID del video para actualizar hashtags (opcional)
+            region_code: Código de región para tendencias
+            
+        Returns:
+            Lista de hashtags recomendados o resultado de actualización
+        """
+        if not self._check_rate_limit(cost=3):
+            return {"status": "error", "message": "Límite de tasa alcanzado"}
+        
+        try:
+            headers = {"Authorization": f"Bearer {self.access_token}"}
+            
+            if video_id:
+                # Actualizar hashtags de un video existente
+                trending_hashtags = self.get_trending_hashtags(region_code=region_code)
+                if trending_hashtags["status"] != "success":
+                    return trending_hashtags
+                
+                new_hashtags = [h["name"] for h in trending_hashtags["hashtags"][:5]]
+                
+                response = requests.post(
+                    f"{self.api_base_url}/video/update/",
+                    headers=headers,
+                    json={
+                        "video_id": video_id,
+                        "post_info": {
+                            "video_tags": new_hashtags
+                        }
+                    }
+                )
+                response.raise_for_status()
+                
+                self._update_rate_limit(response)
+                
+                logger.info(f"Hashtags actualizados para video {video_id}: {new_hashtags}")
+                return {
+                    "status": "success",
+                    "video_id": video_id,
+                    "hashtags": new_hashtags,
+                    "message": "Hashtags actualizados correctamente"
+                }
+            else:
+                # Obtener hashtags en tendencia
+                return self.get_trending_hashtags(region_code=region_code)
+        except requests.HTTPError as e:
+            logger.error(f"Error de API al gestionar hashtags: {str(e)}")
+            return {"status": "error", "message": str(e)}
+        except Exception as e:
+            logger.error(f"Error al gestionar hashtags: {str(e)}")
+            return {"status": "error", "message": str(e)}
+    
+    def get_trending_hashtags(self, region_code: str = "ES", max_results: int = 20) -> Dict[str, Any]:
+        """
+        Obtiene hashtags en tendencia
+        
+        Args:
+            region_code: Código de región
+            max_results: Número máximo de hashtags
+            
+        Returns:
+            Lista de hashtags en tendencia
+        """
+        if not self._check_rate_limit(cost=3):
+            return {"status": "error", "message": "Límite de tasa alcanzado"}
+        
+        try:
+            headers = {"Authorization": f"Bearer {self.access_token}"}
+            response = requests.get(
+                f"{self.api_base_url}/hashtag/query/?fields=name,video_count,view_count",
+                headers=headers,
+                params={
+                    "region_code": region_code,
+                    "max_count": min(max_results, 50)
+                }
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            self._update_rate_limit(response)
+            
+            hashtags = []
+            for hashtag in data.get("data", {}).get("hashtags", []):
+                hashtags.append({
+                    "name": hashtag.get("name", ""),
+                    "video_count": hashtag.get("video_count", 0),
+                    "view_count": hashtag.get("view_count", 0)
+                })
+            
+            return {"status": "success", "hashtags": hashtags}
+        except requests.HTTPError as e:
+            logger.error(f"Error de API al obtener hashtags: {str(e)}")
+            return {"status": "error", "message": str(e)}
+        except Exception as e:
+            logger.error(f"Error al obtener hashtags: {str(e)}")
+            return {"status": "error", "message": str(e)}
+    
+    def get_user_engagement(self, start_date: str = None, end_date: str = None) -> Dict[str, Any]:
+        """
+        Obtiene métricas de engagement del usuario
+        
+        Args:
+            start_date: Fecha de inicio (YYYY-MM-DD)
+            end_date: Fecha de fin (YYYY-MM-DD)
+            
+        Returns:
+            Métricas de engagement
+        """
+        if not self._check_rate_limit(cost=5):
+            return {"status": "error", "message": "Límite de tasa alcanzado"}
+        
+        try:
+            if not end_date:
+                end_date = datetime.now().strftime("%Y-%m-%d")
+            if not start_date:
+                start_date = (datetime.now() - timedelta(days=30)).strftime("%Y-%m-%d")
+            
+            headers = {"Authorization": f"Bearer {self.access_token}"}
+            response = requests.get(
+                f"{self.api_base_url}/user/insights/?fields=views,likes,comments,shares,engagement_rate",
+                headers=headers,
+                params={
+                    "start_date": start_date,
+                    "end_date": end_date
+                }
+            )
+            response.raise_for_status()
+            data = response.json()
+            
+            self._update_rate_limit(response)
+            
+            engagement = {
+                "start_date": start_date,
+                "end_date": end_date,
+                "views": data.get("data", {}).get("views", 0),
+                "likes": data.get("data", {}).get("likes", 0),
+                "comments": data.get("data", {}).get("comments", 0),
+                "shares": data.get("data", {}).get("shares", 0),
+                "engagement_rate": data.get("data", {}).get("engagement_rate", 0),
+                "timestamp": datetime.now().isoformat()
+            }
+            
+            return {"status": "success", "engagement": engagement}
+        except requests.HTTPError as e:
+            logger.error(f"Error de API al obtener engagement: {str(e)}")
+            return {"status": "error", "message": str(e)}
+        except Exception as e:
+            logger.error(f"Error al obtener engagement: {str(e)}")
+            return {"status": "error", "message": str(e)}
     
     def check_shadowban(self, video_id: str, threshold_days: int = 7) -> Dict[str, Any]:
         """
@@ -883,28 +1065,14 @@ class TikTokAdapter:
             Resultado del análisis de shadowban
         """
         try:
-            # Obtener métricas del video
             metrics_response = self.get_video_metrics(video_id)
             if metrics_response["status"] != "success":
                 return {"status": "error", "message": "No se pudieron obtener métricas del video"}
             
             metrics = metrics_response["metrics"]
-            create_time = metrics.get("create_time", "")
-            
-            # Convertir create_time a objeto datetime
-            if create_time:
-                try:
-                    published_date = datetime.fromisoformat(create_time.replace("Z", "+00:00"))
-                except ValueError:
-                    # Intentar otro formato si el anterior falla
-                    published_date = datetime.strptime(create_time, "%Y-%m-%dT%H:%M:%S")
-            else:
-                # Si no hay fecha de creación, usar fecha actual menos 30 días
-                published_date = datetime.now() - timedelta(days=30)
-            
+            published_date = datetime.fromisoformat(metrics["create_time"])
             video_age_days = (datetime.now() - published_date).days
             
-            # Si el video es muy reciente, no podemos determinar shadowban
             if video_age_days < threshold_days:
                 return {
                     "status": "warning",
@@ -913,90 +1081,42 @@ class TikTokAdapter:
                     "confidence": 0.0
                 }
             
-            # Obtener analíticas para analizar tendencia
-            end_date = datetime.now().strftime("%Y-%m-%d")
-            start_date = (datetime.now() - timedelta(days=threshold_days)).strftime("%Y-%m-%d")
-            
-            analytics_response = self.get_advanced_analytics(video_id, start_date, end_date)
+            analytics_response = self.get_advanced_analytics(video_id)
             if analytics_response["status"] != "success":
                 return {"status": "error", "message": "No se pudieron obtener analíticas del video"}
             
             analytics = analytics_response["analytics"]
             
-            # Analizar tendencia de vistas
-            daily_data = analytics.get("daily_data", [])
-            if not daily_data:
-                return {
-                    "status": "warning",
-                    "message": "No hay suficientes datos para analizar",
-                    "is_shadowbanned": False,
-                    "confidence": 0.0
-                }
+            engagement_ratio = metrics["likes"] / metrics["views"] if metrics["views"] > 0 else 0
+            expected_views = analytics["data"].get("reach", 1000) * 0.05
             
-            # Extraer vistas diarias
-            daily_views = []
-            for day_data in daily_data:
-                date_str = day_data.get("date")
-                views = day_data.get("views", 0)
-                daily_views.append((date_str, views))
+            is_shadowbanned = False
+            confidence = 0.0
             
-            # Ordenar por fecha
-            daily_views.sort(key=lambda x: x[0])
+            if metrics["views"] < expected_views:
+                is_shadowbanned = True
+                confidence += 0.4
             
-            # Calcular tendencia de vistas
-            if len(daily_views) >= 3:
-                # Usar los últimos 3 días para determinar tendencia
-                recent_views = [views for _, views in daily_views[-3:]]
-                trend = (recent_views[-1] - recent_views[0]) / 2
-                
-                # Calcular promedio de vistas diarias
-                avg_views = sum(views for _, views in daily_views) / len(daily_views)
-                
-                # Calcular ratio de engagement
-                engagement_ratio = metrics["like_count"] / metrics["view_count"] if metrics["view_count"] > 0 else 0
-                
-                # Determinar si hay shadowban basado en múltiples factores
-                is_shadowbanned = False
-                confidence = 0.0
-                
-                # Factor 1: Caída abrupta de vistas
-                if trend < -0.5 * avg_views:
-                    is_shadowbanned = True
-                    confidence += 0.4
-                
-                # Factor 2: Engagement alto pero vistas bajas
-                follower_count = self.get_user_info().get("user_info", {}).get("follower_count", 1000)
-                expected_views = follower_count * 0.01  # Esperamos al menos 1% de seguidores vean el video
-                if engagement_ratio > 0.1 and metrics["view_count"] < expected_views:
-                    is_shadowbanned = True
-                    confidence += 0.3
-                
-                # Factor 3: Comentarios desactivados o limitados
-                if metrics["comment_count"] == 0 and metrics["view_count"] > 100:
-                    is_shadowbanned = True
-                    confidence += 0.3
-                
-                # Limitar confianza a 1.0
-                confidence = min(confidence, 1.0)
-                
-                return {
-                    "status": "success",
-                    "is_shadowbanned": is_shadowbanned,
-                    "confidence": confidence,
-                    "metrics": {
-                        "trend": trend,
-                        "avg_views": avg_views,
-                        "engagement_ratio": engagement_ratio
-                    },
-                    "message": f"Posible shadowban: {'Sí' if is_shadowbanned else 'No'} (Confianza: {confidence:.2f})"
-                }
-            else:
-                return {
-                    "status": "warning",
-                    "message": "No hay suficientes datos para determinar tendencia",
-                    "is_shadowbanned": False,
-                    "confidence": 0.0
-                }
+            if engagement_ratio < 0.02:
+                is_shadowbanned = True
+                confidence += 0.3
+            
+            if metrics["comments"] == 0 and metrics["views"] > 100:
+                is_shadowbanned = True
+                confidence += 0.3
+            
+            confidence = min(confidence, 1.0)
+            
+            return {
+                "status": "success",
+                "is_shadowbanned": is_shadowbanned,
+                "confidence": confidence,
+                "metrics": {
+                    "engagement_ratio": engagement_ratio,
+                    "expected_views": expected_views
+                },
+                "message": f"Posible shadowban: {'Sí' if is_shadowbanned else 'No'} (Confianza: {confidence:.2f})"
+            }
         except Exception as e:
             logger.error(f"Error al verificar shadowban: {str(e)}")
             return {"status": "error", "message": str(e)}

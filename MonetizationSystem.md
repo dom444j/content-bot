@@ -587,13 +587,52 @@ content-bot/
   - Eliminación de métodos de carga directa de archivos JSON
   - Manejo adecuado de errores cuando faltan credenciales
 
-### 15.2 Pruebas y Validación
+### 15.2 Implementación de OAuth 2.0
+- **Flujo de Autenticación en YouTube**:
+  - **Autorización Inicial**:
+    - Utiliza `google-auth-oauthlib.flow.InstalledAppFlow` para el flujo interactivo
+    - Solicita permisos específicos mediante scopes definidos
+    - Almacena el refresh_token para uso futuro
+  
+  - **Refresco Automático de Tokens**:
+    - Implementa `credentials.refresh()` para renovar tokens expirados
+    - Actualiza automáticamente el archivo `platforms.json` con tokens renovados
+    - Maneja errores específicos de autenticación con reintentos
+  
+  - **Scopes Implementados**:
+    ```
+    https://www.googleapis.com/auth/youtube
+    https://www.googleapis.com/auth/youtube.upload
+    https://www.googleapis.com/auth/youtube.readonly
+    https://www.googleapis.com/auth/youtube.force-ssl
+    https://www.googleapis.com/auth/youtubepartner
+    https://www.googleapis.com/auth/yt-analytics.readonly
+    ```
+  
+  - **Configuración Requerida**:
+    - `client_id`: ID de cliente de OAuth 2.0 de Google
+    - `client_secret`: Secreto de cliente de OAuth 2.0
+    - `refresh_token`: Token de actualización (generado en la primera autorización)
+    - `redirect_uri`: URI de redirección (por defecto: `urn:ietf:wg:oauth:2.0:oob`)
+
+- **Seguridad Mejorada**:
+  - Validación estricta de credenciales antes de inicializar APIs
+  - Manejo de errores específicos para problemas de autenticación
+  - Almacenamiento seguro de tokens fuera del control de versiones
+  - Rotación automática de tokens de acceso
+
+### 15.3 Pruebas y Validación
 - **Pruebas Unitarias** (`tests/test_config_loader.py`): ✅
   - Verifica la carga correcta de configuraciones
   - Prueba la obtención de credenciales para plataformas específicas
   - Valida la priorización de variables de entorno sobre valores en archivos JSON
 
-### 15.3 Mejores Prácticas Implementadas
+- **Pruebas de Autenticación** (`tests/test_youtube_adapter.py`):
+  - Verifica el flujo completo de OAuth 2.0
+  - Prueba el refresco automático de tokens
+  - Simula errores de autenticación para validar manejo de excepciones
+
+### 15.4 Mejores Prácticas Implementadas
 - **Seguridad**:
   - Exclusión de archivos con credenciales reales del control de versiones (`.gitignore`)
   - Uso de plantillas con placeholders en lugar de credenciales reales
@@ -673,3 +712,239 @@ El Sistema Automatizado de Creación, Monetización y Crecimiento de Audiencia M
 
 ### 16.4 Visión de Futuro
 El sistema está diseñado para evolucionar continuamente, adaptándose a nuevas plataformas, tendencias y oportunidades de monetización. Con su enfoque en la auto-mejora y la optimización basada en datos, tiene el potencial de convertirse en una solución líder para la creación y monetización automatizada de contenido multimedia.
+
+## Sistema de Manejo de Errores
+
+### 17.1 Arquitectura de Logging
+- **Niveles de Logging**:
+  - `DEBUG`: Información detallada para desarrollo
+  - `INFO`: Eventos normales del sistema
+  - `WARNING`: Situaciones inesperadas pero no críticas
+  - `ERROR`: Errores que impiden funcionalidades específicas
+  - `CRITICAL`: Errores que impiden el funcionamiento del sistema
+
+- **Estructura de Logs**:
+  - `logs/errors/`: Errores categorizados por tipo
+  - `logs/performance/`: Métricas de rendimiento
+  - `logs/activity/`: Registro de actividades normales
+  - Rotación de logs: Diaria con compresión automática
+
+- **Formato Estandarizado**: 
+{timestamp} - {component} - {level} - {message} - {context}
+
+
+### 17.2 Manejo de Excepciones
+- **Estrategia de Captura**:
+- Excepciones específicas para cada módulo
+- Reintentos automáticos para errores transitorios
+- Fallbacks para servicios críticos
+
+- **Respuestas Estandarizadas**:
+```json
+{
+  "status": "error",
+  "code": "ERROR_CODE",
+  "message": "Mensaje legible",
+  "details": { "additional_info": "..." },
+  "timestamp": "ISO-8601"
+}
+```
+- Monitoreo Proactivo :
+  - Alertas en tiempo real para errores críticos vía notifier.py
+  - Dashboard de errores en dashboard_manager.py
+  - Análisis de patrones de errores para prevención
+### 17.3 Recuperación y Resiliencia
+- Estrategias de Recuperación :
+  
+  - Puntos de control para procesos largos
+  - Colas de tareas con persistencia
+  - Estado distribuido para recuperación
+- Circuito Abierto :
+  
+  - Detección de servicios degradados
+  - Desactivación temporal de funcionalidades no críticas
+  - Reactivación automática tras recuperación
+- Ejemplos de Implementación :
+try:
+    result = api_service.call()
+except RateLimitError:
+    # Reintento con backoff exponencial
+    retry_with_backoff(api_service.call)
+except APIError as e:
+    # Registro detallado y notificación
+    logger.error(f"API Error: {str(e)}", extra={"context": e.context})
+    notifier.send_alert("api_failure", severity="high")
+    # Fallback a caché o alternativa
+    result = fallback_service.get_cached_result()
+
+
+### CI/CD con GitHub Actions
+```markdown:c%3A%5CUsers%5CDOM%5CDesktop%5Ccontent-bot%5CMonetizationSystem.md
+## CI/CD y Automatización de Despliegue
+
+### 18.1 Configuración de GitHub Actions
+- **Workflows Implementados**:
+  - `test.yml`: Ejecución de pruebas unitarias e integración
+  - `lint.yml`: Verificación de estilo de código y calidad
+  - `build.yml`: Construcción de imágenes Docker
+  - `deploy.yml`: Despliegue automático a entornos
+
+- **Ejemplo de Workflow de Pruebas**:
+  ```yaml
+  name: Run Tests
+  on: [push, pull_request]
+  jobs:
+    test:
+      runs-on: ubuntu-latest
+      steps:
+        - uses: actions/checkout@v3
+        - name: Set up Python
+          uses: actions/setup-python@v4
+          with:
+            python-version: '3.10'
+        - name: Install dependencies
+          run: |
+            python -m pip install --upgrade pip
+            pip install -r requirements.txt
+            pip install pytest pytest-cov
+        - name: Run tests
+          run: |
+            pytest --cov=. --cov-report=xml
+        - name: Upload coverage
+          uses: codecov/codecov-action@v3    
+```
+
+### 18.2 Proceso de Integración Continua
+- Validación Automática :
+  
+  - Ejecución de pruebas unitarias en cada commit
+  - Análisis estático de código
+  - Verificación de dependencias vulnerables
+- Entornos de Prueba :
+  
+  - Entorno de desarrollo: Despliegue automático para pruebas
+  - Entorno de staging: Validación previa a producción
+  - Entorno de producción: Despliegue manual o programado
+### 18.3 Despliegue Continuo
+- Estrategia de Despliegue :
+  
+  - Despliegues canary para validación gradual
+  - Rollbacks automáticos ante métricas degradadas
+  - Notificaciones de despliegue vía notifier.py
+- Gestión de Secretos :
+  
+  - Almacenamiento seguro de credenciales en GitHub Secrets
+  - Inyección de variables de entorno en tiempo de despliegue
+  - Rotación automática de credenciales
+
+
+### Dockerización
+```markdown:c%3A%5CUsers%5CDOM%5CDesktop%5Ccontent-bot%5CMonetizationSystem.md
+## Dockerización y Despliegue en Contenedores
+
+### 19.1 Arquitectura de Contenedores
+- **Imágenes Base**:
+  - `content-bot-base`: Python 3.10, dependencias comunes
+  - `content-bot-ml`: Base + bibliotecas ML (PyTorch, TensorFlow)
+  - `content-bot-api`: Base + dependencias API (FastAPI, Uvicorn)
+
+- **Microservicios**:
+  - `orchestrator-service`: Orquestador central
+  - `creation-service`: Generación de contenido
+  - `platform-service`: Adaptadores de plataforma
+  - `analytics-service`: Análisis y optimización
+
+- **Dockerfile Multi-Etapa**:
+  ```dockerfile
+  # Etapa de construcción
+  FROM python:3.10-slim AS builder
+  WORKDIR /app
+  COPY requirements.txt .
+  RUN pip wheel --no-cache-dir --wheel-dir /app/wheels -r requirements.txt
+
+  # Etapa de ejecución
+  FROM python:3.10-slim
+  WORKDIR /app
+  COPY --from=builder /app/wheels /wheels
+  RUN pip install --no-cache /wheels/*
+  COPY . .
+  
+  # Configuración de entorno
+  ENV PYTHONUNBUFFERED=1
+  ENV PYTHONPATH=/app
+  
+  # Comando de ejecución
+  CMD ["python", "-m", "brain.orchestrator"]
+  ```
+### 19.2 Orquestación con Docker Compose
+- Servicios Definidos:
+version: '3.8'
+services:
+  mongodb:
+    image: mongo:latest
+    volumes:
+      - mongo-data:/data/db
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER}
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD}
+  
+  timescaledb:
+    image: timescale/timescaledb:latest-pg14
+    volumes:
+      - timescale-data:/var/lib/postgresql/data
+    environment:
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+  
+  orchestrator:
+    build:
+      context: .
+      dockerfile: Dockerfile.orchestrator
+    depends_on:
+      - mongodb
+      - timescaledb
+    environment:
+      - MONGODB_URI=mongodb://${MONGO_USER}:${MONGO_PASSWORD}@mongodb:27017
+      - TIMESCALEDB_URI=postgresql://postgres:${POSTGRES_PASSWORD}@timescaledb:5432/analytics
+
+  # Otros servicios...
+
+volumes:
+  mongo-data:
+  timescale-data:
+
+### 19.3 Gestión de Recursos
+- Límites y Reservas :
+  
+  - CPU: 0.5-2 cores por servicio
+  - Memoria: 512MB-2GB por servicio
+  - Almacenamiento: Volúmenes persistentes para datos
+- Escalado :
+  
+  - Horizontal: Réplicas para servicios sin estado
+  - Vertical: Ajuste de recursos para servicios con estado
+  - Auto-escalado basado en métricas de uso
+
+
+## 3. Plan de Implementación
+
+1. **Actualizar los adaptadores de plataforma**:
+   - Implementar OAuth 2.0 en `youtube_adapter.py`
+   - Actualizar `tiktok_adapter.py` para usar el sistema de configuración segura
+
+2. **Añadir las secciones faltantes a MonetizationSystem.md**:
+   - Sistema de Manejo de Errores
+   - CI/CD con GitHub Actions
+   - Dockerización y Despliegue en Contenedores
+
+3. **Implementar pruebas unitarias adicionales**:
+   - Crear pruebas para los adaptadores de plataforma
+   - Implementar pruebas para los endpoints de API
+
+4. **Configurar GitHub Actions**:
+   - Crear los workflows necesarios para CI/CD
+   - Configurar los secretos para las credenciales
+
+5. **Crear archivos Docker**:
+   - Dockerfile para cada servicio
+   - docker-compose.yml para orquestación
+

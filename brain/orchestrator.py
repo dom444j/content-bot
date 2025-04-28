@@ -17,6 +17,7 @@ Mejoras implementadas:
 5. Planes de recuperación: Genera estrategias para superar shadowbans.
 6. Monitoreo de recuperación: Verifica periódicamente el estado de recuperación.
 7. Reintentos en publicación: Intenta hasta 3 veces por plataforma antes de abortar, con notificaciones y métricas.
+8. Soporte para OAuth 2.0: Inicialización y manejo de tokens para YouTube y TikTok.
 """
 
 import os
@@ -29,6 +30,7 @@ import threading
 import queue
 import random
 import math
+import requests
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
 from logging.handlers import RotatingFileHandler
@@ -148,6 +150,9 @@ class Orchestrator:
             'analysis': {}
         }
         
+        # Plataformas que usan OAuth 2.0
+        self.oauth_platforms = ['youtube', 'tiktok']
+        
         self._initialized = True
         logger.info("Orchestrator inicializado correctamente")
     
@@ -183,11 +188,39 @@ class Orchestrator:
         os.makedirs(logs_dir, exist_ok=True)
         
         platforms_config = {
-            "youtube": {"api_key": "", "channel_id": "", "enabled": True},
-            "tiktok": {"api_key": "", "account_id": "", "enabled": True},
-            "instagram": {"api_key": "", "account_id": "", "enabled": True},
-            "threads": {"api_key": "", "account_id": "", "enabled": False},
-            "bluesky": {"api_key": "", "handle": "", "enabled": False}
+            "youtube": {
+                "client_key": "",
+                "client_secret": "",
+                "access_token": "",
+                "refresh_token": "",
+                "redirect_uri": "http://localhost:8080",
+                "channel_id": "",
+                "enabled": True
+            },
+            "tiktok": {
+                "client_key": "",
+                "client_secret": "",
+                "access_token": "",
+                "refresh_token": "",
+                "redirect_uri": "http://localhost:8080",
+                "open_id": "",
+                "enabled": True
+            },
+            "instagram": {
+                "api_key": "",
+                "account_id": "",
+                "enabled": True
+            },
+            "threads": {
+                "api_key": "",
+                "account_id": "",
+                "enabled": False
+            },
+            "bluesky": {
+                "api_key": "",
+                "handle": "",
+                "enabled": False
+            }
         }
         
         strategy_config = {
@@ -222,7 +255,7 @@ class Orchestrator:
             }
         }
         
-        with open(os.path.join(config_dir, добро/platforms.json'), 'w', encoding='utf-8') as f:
+        with open(os.path.join(config_dir, 'platforms.json'), 'w', encoding='utf-8') as f:
             json.dump(platforms_config, f, indent=4)
         with open(os.path.join(config_dir, 'strategy.json'), 'w', encoding='utf-8') as f:
             json.dump(strategy_config, f, indent=4)
@@ -232,6 +265,181 @@ class Orchestrator:
             json.dump(characters_config, f, indent=4)
             
         logger.info("Creada configuración por defecto")
+    
+    def _verify_config(self) -> bool:
+        """Verifica que la configuración sea válida y completa"""
+        if not self.config:
+            return False
+        
+        platforms_enabled = any(p.get('enabled', False) for p in self.config.get('platforms', {}).values())
+        if not platforms_enabled:
+            logger.warning("No hay plataformas habilitadas en la configuración")
+            return False
+        
+        # Verificar credenciales para plataformas OAuth
+        for platform in self.oauth_platforms:
+            platform_config = self.config.get('platforms', {}).get(platform, {})
+            if platform_config.get('enabled', False):
+                if not self._verify_platform_credentials(platform):
+                    logger.warning(f"Credenciales incompletas para {platform}")
+                    return False
+        
+        niches_enabled = any(n.get('enabled', False) for n in self.config.get('niches', {}).values())
+        if not niches_enabled:
+            logger.warning("No hay nichos habilitados en la configuración")
+            return False
+        
+        return True
+    
+    def _verify_platform_credentials(self, platform: str) -> bool:
+        """Verifica que las credenciales de una plataforma sean válidas"""
+        platform_config = self.config.get('platforms', {}).get(platform, {})
+        required_fields = ['client_key', 'client_secret', 'redirect_uri']
+        
+        if platform in self.oauth_platforms:
+            # Verificar campos requeridos para OAuth 2.0
+            for field in required_fields:
+                if not platform_config.get(field):
+                    logger.error(f"Falta el campo {field} en la configuración de {platform}")
+                    return False
+            # Si no hay tokens, se iniciará el flujo OAuth más tarde
+            return True
+        else:
+            # Para plataformas sin OAuth, verificar api_key
+            if not platform_config.get('api_key'):
+                logger.error(f"Falta api_key en la configuración de {platform}")
+                return False
+            return True
+    
+    def _save_platform_credentials(self, platform: str, credentials: Dict) -> None:
+        """Guarda las credenciales actualizadas de una plataforma"""
+        try:
+            config_file = os.path.join('config', 'platforms.json')
+            if os.path.exists(config_file):
+                with open(config_file, 'r', encoding='utf-8') as f:
+                    all_configs = json.load(f)
+                all_configs[platform].update(credentials)
+                with open(config_file, 'w', encoding='utf-8') as f:
+                    json.dump(all_configs, f, indent=4)
+                logger.info(f"Credenciales actualizadas para {platform}")
+                activity_logger.info(f"Credenciales guardadas para {platform}")
+            else:
+                logger.warning(f"No se pudo guardar credenciales: archivo platforms.json no encontrado")
+        except Exception as e:
+            logger.error(f"Error al guardar credenciales para {platform}: {str(e)}")
+    
+    def _initialize_oauth_platform(self, platform: str) -> bool:
+        """Inicializa una plataforma con OAuth 2.0"""
+        platform_config = self.config.get('platforms', {}).get(platform, {})
+        platform_adapter = self.subsystems['publication'].get(f'{platform}_adapter')
+        
+        if not platform_adapter:
+            logger.error(f"Adaptador para {platform} no disponible")
+            return False
+        
+        try:
+            # Verificar si ya hay tokens válidos
+            access_token = platform_config.get('access_token')
+            refresh_token = platform_config.get('refresh_token')
+            token_expiry = platform_config.get('token_expiry')
+            
+            if access_token and refresh_token and token_expiry:
+                expiry_time = datetime.datetime.fromisoformat(token_expiry)
+                if expiry_time > datetime.datetime.now() + datetime.timedelta(minutes=5):
+                    logger.info(f"Tokens válidos encontrados para {platform}")
+                    return True
+                else:
+                    logger.info(f"Tokens expirados para {platform}, intentando refrescar")
+                    return self._refresh_platform_token(platform)
+            
+            # Iniciar flujo OAuth 2.0
+            client_key = platform_config.get('client_key')
+            client_secret = platform_config.get('client_secret')
+            redirect_uri = platform_config.get('redirect_uri')
+            
+            if not all([client_key, client_secret, redirect_uri]):
+                logger.error(f"Credenciales incompletas para {platform}")
+                return False
+            
+            auth_url = platform_adapter.get_authorization_url(client_key, redirect_uri)
+            logger.info(f"Por favor, visita esta URL para autorizar {platform}: {auth_url}")
+            print(f"URL de autorización para {platform}: {auth_url}")
+            auth_code = input(f"Ingresa el código de autorización para {platform}: ")
+            
+            token_response = platform_adapter.exchange_code_for_tokens(
+                auth_code=auth_code,
+                client_key=client_key,
+                client_secret=client_secret,
+                redirect_uri=redirect_uri
+            )
+            
+            if token_response.get('status') != 'success':
+                logger.error(f"Error al obtener tokens para {platform}: {token_response.get('message')}")
+                return False
+            
+            # Actualizar configuración con nuevos tokens
+            new_credentials = {
+                'access_token': token_response['access_token'],
+                'refresh_token': token_response['refresh_token'],
+                'token_expiry': (datetime.datetime.now() + datetime.timedelta(seconds=token_response['expires_in'])).isoformat()
+            }
+            if platform == 'tiktok':
+                new_credentials['open_id'] = platform_config.get('open_id', '')
+            elif platform == 'youtube':
+                new_credentials['channel_id'] = platform_config.get('channel_id', '')
+            
+            self._save_platform_credentials(platform, new_credentials)
+            self.config['platforms'][platform].update(new_credentials)
+            
+            logger.info(f"Autenticación OAuth 2.0 completada para {platform}")
+            activity_logger.info(f"Flujo OAuth 2.0 completado para {platform}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error al inicializar OAuth para {platform}: {str(e)}")
+            return False
+    
+    def _refresh_platform_token(self, platform: str) -> bool:
+        """Refresca el token de acceso para una plataforma"""
+        platform_config = self.config.get('platforms', {}).get(platform, {})
+        platform_adapter = self.subsystems['publication'].get(f'{platform}_adapter')
+        
+        if not platform_adapter:
+            logger.error(f"Adaptador para {platform} no disponible")
+            return False
+        
+        try:
+            refresh_token = platform_config.get('refresh_token')
+            if not refresh_token:
+                logger.error(f"No se encontró refresh_token para {platform}")
+                return False
+            
+            token_response = platform_adapter.refresh_access_token(
+                refresh_token=refresh_token,
+                client_key=platform_config.get('client_key'),
+                client_secret=platform_config.get('client_secret')
+            )
+            
+            if token_response.get('status') != 'success':
+                logger.error(f"Error al refrescar token para {platform}: {token_response.get('message')}")
+                return False
+            
+            new_credentials = {
+                'access_token': token_response['access_token'],
+                'refresh_token': token_response.get('refresh_token', refresh_token),
+                'token_expiry': (datetime.datetime.now() + datetime.timedelta(seconds=token_response['expires_in'])).isoformat()
+            }
+            
+            self._save_platform_credentials(platform, new_credentials)
+            self.config['platforms'][platform].update(new_credentials)
+            
+            logger.info(f"Token refrescado correctamente para {platform}")
+            activity_logger.info(f"Token refrescado para {platform}")
+            return True
+            
+        except Exception as e:
+            logger.error(f"Error al refrescar token para {platform}: {str(e)}")
+            return False
     
     def _load_component(self, component_name: str) -> Any:
         """Carga dinámicamente un componente del cerebro según sea necesario"""
@@ -248,7 +456,7 @@ class Orchestrator:
             elif component_name == 'notifier':
                 from brain.notifier import Notifier
                 self.components[component_name] = Notifier()
-            elif component_name == 'knowledge_key':
+            elif component_name == 'knowledge_base':
                 from data.knowledge_base import KnowledgeBase
                 self.components[component_name] = KnowledgeBase()
             elif component_name == 'analytics_engine':
@@ -301,7 +509,14 @@ class Orchestrator:
             elif subsystem == 'publication':
                 if module in ['youtube_adapter', 'tiktok_adapter', 'instagram_adapter']:
                     from platform_adapters import api_router
-                    self.subsystems[subsystem][module] = getattr(api_router, module)()
+                    adapter = getattr(api_router, module)()
+                    self.subsystems[subsystem][module] = adapter
+                    if module in [f'{p}_adapter' for p in self.oauth_platforms]:
+                        # Inicializar OAuth para plataformas que lo requieren
+                        platform_name = module.replace('_adapter', '')
+                        if not self._initialize_oauth_platform(platform_name):
+                            logger.error(f"No se pudo inicializar OAuth para {platform_name}")
+                            return None
             elif subsystem == 'monetization':
                 if module == 'revenue_optimizer':
                     from monetization.revenue_optimizer import RevenueOptimizer
@@ -391,23 +606,6 @@ class Orchestrator:
         except Exception as e:
             logger.error(f"Error al detener Orchestrator: {str(e)}")
             return False
-    
-    def _verify_config(self) -> bool:
-        """Verifica que la configuración sea válida y completa"""
-        if not self.config:
-            return False
-        
-        platforms_enabled = any(p.get('enabled', False) for p in self.config.get('platforms', {}).values())
-        if not platforms_enabled:
-            logger.warning("No hay plataformas habilitadas en la configuración")
-            return False
-        
-        niches_enabled = any(n.get('enabled', False) for n in self.config.get('niches', {}).values())
-        if not niches_enabled:
-            logger.warning("No hay nichos habilitados en la configuración")
-            return False
-        
-        return True
     
     def _initialize_channels(self):
         """Inicializa los canales configurados"""
@@ -662,10 +860,18 @@ class Orchestrator:
         for platform in self.channels[channel_id]['platforms']:
             platform_adapter = self._load_subsystem('publication', f'{platform}_adapter')
             if platform_adapter:
+                # Asegurar que el token esté válido antes de verificar shadowban
+                if platform in self.oauth_platforms:
+                    token_expiry = self.config['platforms'][platform].get('token_expiry')
+                    if not token_expiry or datetime.datetime.fromisoformat(token_expiry) <= datetime.datetime.now():
+                        if not self._refresh_platform_token(platform):
+                            logger.error(f"No se pudo refrescar token para {platform}, omitiendo verificación de shadowban")
+                            continue
+                
                 result = platform_adapter.check_shadowban(
                     channel_id=self.channels[channel_id].get(f'{platform}_id', '')
                 )
-                if result.get('shadowbanned', False):
+                if result.get('is_shadowbanned', False):
                     shadowbanned = True
                     logger.warning(f"Shadowban detectado en {platform} para canal {channel_id}")
                     
@@ -682,7 +888,7 @@ class Orchestrator:
                         }
                     }, Priority.CRITICAL)
                     
-                    self.channel_status[channel_id] = ChannelándomeStatus.SHADOWBANNED
+                    self.channel_status[channel_id] = ChannelStatus.SHADOWBANNED
                     self.shadowban_status[f"{channel_id}_{platform}"] = {'active': True, 'detected_at': datetime.datetime.now().isoformat()}
                     
                     notifier = self._load_component('notifier')
@@ -1073,6 +1279,18 @@ class Orchestrator:
                         }
                         continue
                     
+                    # Verificar token para plataformas OAuth
+                    if platform in self.oauth_platforms:
+                        token_expiry = self.config['platforms'][platform].get('token_expiry')
+                        if not token_expiry or datetime.datetime.fromisoformat(token_expiry) <= datetime.datetime.now():
+                            if not self._refresh_platform_token(platform):
+                                task['steps']['publication']['platforms_results'][platform] = {
+                                    'success': False,
+                                    'error': 'No se pudo refrescar el token de acceso',
+                                    'retry_count': 0
+                                }
+                                continue
+                    
                     metadata = {
                         'title': task['steps']['script_creation']['result'].get('title', f"Video for {channel['name']}"),
                         'description': task['steps']['script_creation']['result'].get('description', ''),
@@ -1442,42 +1660,63 @@ class Orchestrator:
             if task_id in self.paused_tasks:
                 del self.paused_tasks[task_id]
     
-    def _process_shadowban_recovery(self, task_id: str):
-        """Procesa una tarea de recuperación de shadowban"""
+        def _process_shadowban_recovery(self, task_id: str):
+        """Procesa una tarea de recuperación de shadowban con reintentos"""
         task = self.current_tasks.get(task_id)
         if not task:
+            logger.error(f"Tarea {task_id} no encontrada para recuperación de shadowban")
             return
-            
+
         task['status'] = 'processing'
         self._persist_task(task)
         channel_id = task['channel_id']
         platform = task['platform']
-        channel = self.channels[channel_id]
-        
+        channel = self.channels.get(channel_id, {})
+
         try:
+            # Paso 1: Pausar publicaciones
             if task['steps']['pause_publications']['status'] == 'pending':
                 task['steps']['pause_publications']['status'] = 'processing'
                 self._persist_task(task)
-                for t_id, t in self.current_tasks.items():
-                    if t['channel_id'] == channel_id and t['type'] == 'content_creation':
-                        if t['steps']['publication']['status'] in ['pending', 'processing']:
-                            t['status'] = 'paused'
-                            t['paused_reason'] = f"Shadowban en {platform}"
-                            self.paused_tasks[t_id] = t
-                            self._persist_task(t)
-                task['steps']['pause_publications']['status'] = 'completed'
+                for attempt in range(self.max_retries + 1):
+                    try:
+                        # Pausar todas las tareas de publicación para la plataforma afectada
+                        for t_id, t in self.current_tasks.items():
+                            if t['channel_id'] == channel_id and t['type'] == 'content_creation':
+                                if platform in self.channels[channel_id]['platforms']:
+                                    t['status'] = 'paused'
+                                    t['paused_reason'] = f"Shadowban en {platform}"
+                                    self.paused_tasks[t_id] = t
+                                    self._persist_task(t)
+                                    logger.info(f"Tarea {t_id} pausada por shadowban en {platform}")
+                        task['steps']['pause_publications']['status'] = 'completed'
+                        break
+                    except Exception as e:
+                        task['steps']['pause_publications']['retries'] = attempt + 1
+                        if attempt < self.max_retries:
+                            delay = self._calculate_retry_delay(attempt)
+                            logger.warning(f"Reintento {attempt + 1}/{self.max_retries} para pause_publications: {str(e)}, esperando {delay}s")
+                            time.sleep(delay)
+                        else:
+                            task['steps']['pause_publications']['status'] = 'failed'
+                            task['steps']['pause_publications']['error'] = str(e)
+                            raise
                 self._persist_task(task)
-            
+
+            # Paso 2: Analizar causa del shadowban
             if task['steps']['analyze_cause']['status'] == 'pending':
                 task['steps']['analyze_cause']['status'] = 'processing'
                 self._persist_task(task)
-                shadowban_detector = self._load_component('shadowban_detector')
-                cause = None
+                cause_analysis = None
                 for attempt in range(self.max_retries + 1):
                     try:
+                        shadowban_detector = self._load_component('shadowban_detector')
                         if shadowban_detector:
-                            cause = shadowban_detector.analyze_shadowban_cause(channel_id, platform)
-                            task['steps']['analyze_cause']['result'] = cause
+                            cause_analysis = shadowban_detector.analyze_shadowban_cause(
+                                channel_id=channel_id,
+                                platform=platform
+                            )
+                            task['steps']['analyze_cause']['result'] = cause_analysis
                             task['steps']['analyze_cause']['status'] = 'completed'
                             break
                         else:
@@ -1493,29 +1732,30 @@ class Orchestrator:
                             task['steps']['analyze_cause']['error'] = str(e)
                             raise
                 self._persist_task(task)
-            
+
+            # Paso 3: Implementar correcciones
             if task['steps']['implement_fix']['status'] == 'pending':
                 task['steps']['implement_fix']['status'] = 'processing'
                 self._persist_task(task)
-                # Crear plan de recuperación
                 recovery_plan = self._create_recovery_plan(channel_id)
-                fix_success = False
                 for attempt in range(self.max_retries + 1):
                     try:
-                        shadowban_detector = self._load_component('shadowban_detector')
-                        if shadowban_detector:
-                            fix_result = shadowban_detector.implement_shadowban_fix(
+                        compliance_checker = self._load_subsystem('compliance', 'compliance_checker')
+                        if compliance_checker:
+                            # Aplicar restricciones de contenido según el plan de recuperación
+                            compliance_checker.apply_recovery_restrictions(
                                 channel_id=channel_id,
                                 platform=platform,
-                                cause=task['steps']['analyze_cause']['result'],
-                                recovery_plan=recovery_plan
+                                restrictions=recovery_plan['content_restrictions']
                             )
-                            task['steps']['implement_fix']['result'] = fix_result
+                            task['steps']['implement_fix']['result'] = {
+                                'restrictions_applied': recovery_plan['content_restrictions'],
+                                'plan': recovery_plan
+                            }
                             task['steps']['implement_fix']['status'] = 'completed'
-                            fix_success = True
                             break
                         else:
-                            raise Exception("Shadowban detector not available")
+                            raise Exception("Compliance checker not available")
                     except Exception as e:
                         task['steps']['implement_fix']['retries'] = attempt + 1
                         if attempt < self.max_retries:
@@ -1527,34 +1767,38 @@ class Orchestrator:
                             task['steps']['implement_fix']['error'] = str(e)
                             raise
                 self._persist_task(task)
-                if not fix_success:
-                    raise Exception("Failed to implement shadowban fix")
-            
+
+            # Paso 4: Verificar resolución
             if task['steps']['verify_resolution']['status'] == 'pending':
                 task['steps']['verify_resolution']['status'] = 'processing'
                 self._persist_task(task)
-                resolved = False
+                resolution_verified = False
                 for attempt in range(self.max_retries + 1):
                     try:
-                        shadowban_detector = self._load_component('shadowban_detector')
-                        if shadowban_detector:
-                            result = shadowban_detector.check_shadowban(channel_id, platform)
-                            if not result['shadowbanned']:
-                                resolved = True
-                                self.shadowban_status[f"{channel_id}_{platform}"]['active'] = False
-                                task['steps']['verify_resolution']['result'] = {'resolved': True}
+                        platform_adapter = self._load_subsystem('publication', f'{platform}_adapter')
+                        if platform_adapter:
+                            # Verificar token para plataformas OAuth
+                            if platform in self.oauth_platforms:
+                                token_expiry = self.config['platforms'][platform].get('token_expiry')
+                                if not token_expiry or datetime.datetime.fromisoformat(token_expiry) <= datetime.datetime.now():
+                                    if not self._refresh_platform_token(platform):
+                                        raise Exception(f"No se pudo refrescar token para {platform}")
+
+                            result = platform_adapter.check_shadowban(
+                                channel_id=self.channels[channel_id].get(f'{platform}_id', '')
+                            )
+                            if not result.get('is_shadowbanned', False):
+                                resolution_verified = True
+                                task['steps']['verify_resolution']['result'] = {'shadowban_resolved': True}
                                 task['steps']['verify_resolution']['status'] = 'completed'
-                                # Marcar shadowban como resuelto en el historial
-                                for entry in self.shadowban_history[channel_id]:
-                                    if entry['platform'] == platform and not entry['resolved']:
-                                        entry['resolved'] = True
-                                        entry['resolved_at'] = datetime.datetime.now().isoformat()
-                                        break
+                                self.shadowban_status[f"{channel_id}_{platform}"]['active'] = False
+                                self.shadowban_history[channel_id][-1]['resolved'] = True
+                                self.shadowban_history[channel_id][-1]['resolved_at'] = datetime.datetime.now().isoformat()
                                 break
                             else:
                                 raise Exception("Shadowban persists")
                         else:
-                            raise Exception("Shadowban detector not available")
+                            raise Exception(f"Platform adapter for {platform} not available")
                     except Exception as e:
                         task['steps']['verify_resolution']['retries'] = attempt + 1
                         if attempt < self.max_retries:
@@ -1566,38 +1810,41 @@ class Orchestrator:
                             task['steps']['verify_resolution']['error'] = str(e)
                             raise
                 self._persist_task(task)
-                if not resolved:
-                    raise Exception("Failed to resolve shadowban")
-            
+
             task['status'] = 'completed'
             task['completed_at'] = datetime.datetime.now().isoformat()
             self._persist_task(task)
-            
+
             notifier = self._load_component('notifier')
             if notifier:
                 notifier.send_notification(
-                    title=f"Shadowban resuelto para {channel['name']} en {platform}",
-                    message="Se han implementado las correcciones necesarias",
+                    title=f"Recuperación de shadowban completada para {channel['name']} en {platform}",
+                    message="El proceso de recuperación ha finalizado con éxito.",
                     level="info"
                 )
-            
+
+            knowledge_base = self._load_component('knowledge_base')
+            if knowledge_base:
+                knowledge_base.save_recovery_task(task)
+
             logger.info(f"Tarea de recuperación de shadowban completada: {task_id}")
-            
+            activity_logger.info(f"Recuperación de shadowban completada para canal {channel_id} en {platform}")
+
         except Exception as e:
             logger.error(f"Error en proceso de recuperación de shadowban: {str(e)}")
             task['status'] = 'failed'
             task['error'] = str(e)
             task['failed_at'] = datetime.datetime.now().isoformat()
             self._persist_task(task)
-            
+
             notifier = self._load_component('notifier')
             if notifier:
                 notifier.send_notification(
-                    title=f"Error en recuperación de shadowban para {self.channels[channel_id]['name']} en {platform}",
+                    title=f"Error en recuperación de shadowban para {channel['name']} en {platform}",
                     message=f"Error: {str(e)}",
                     level="error"
                 )
-        
+
         finally:
             self.task_history.append(task)
             if task_id in self.current_tasks:
@@ -1605,16 +1852,99 @@ class Orchestrator:
             if task_id in self.paused_tasks:
                 del self.paused_tasks[task_id]
 
-# Punto de entrada para pruebas
+    def _handle_authentication_error(self, platform: str, error: Exception) -> bool:
+        """Maneja errores de autenticación para plataformas OAuth"""
+        if platform in self.oauth_platforms:
+            logger.warning(f"Error de autenticación en {platform}: {str(error)}")
+            # Intentar refrescar el token
+            if self._refresh_platform_token(platform):
+                logger.info(f"Token refrescado tras error de autenticación en {platform}")
+                return True
+            else:
+                logger.error(f"No se pudo refrescar token para {platform}, iniciando nuevo flujo OAuth")
+                if self._initialize_oauth_platform(platform):
+                    logger.info(f"Nuevo flujo OAuth completado para {platform}")
+                    return True
+                else:
+                    logger.error(f"Fallo en la autenticación para {platform}")
+                    return False
+        return False
+
+    def get_recovery_status(self, channel_id: str) -> Dict:
+        """Obtiene el estado actual de recuperación de un canal"""
+        if channel_id not in self.channels:
+            return {'success': False, 'error': 'Channel not found'}
+
+        recovery_status = {
+            'channel_id': channel_id,
+            'status': self.channel_status.get(channel_id, ChannelStatus.ACTIVE),
+            'shadowban_history': self.shadowban_history.get(channel_id, []),
+            'recovery_plan': self.recovery_plans.get(channel_id, None),
+            'active_shadowbans': {
+                platform: status for platform, status in self.shadowban_status.items()
+                if platform.startswith(channel_id) and status['active']
+            }
+        }
+        return {'success': True, 'recovery_status': recovery_status}
+
+    def manual_resume_tasks(self, channel_id: str, platform: str = None) -> Dict:
+        """Reanuda manualmente tareas pausadas para un canal y plataforma específica"""
+        if channel_id not in self.channels:
+            return {'success': False, 'error': 'Channel not found'}
+
+        resumed_tasks = []
+        tasks_to_resume = []
+
+        for task_id, task in self.paused_tasks.items():
+            if task['channel_id'] == channel_id:
+                if platform and task.get('paused_reason', '').endswith(platform):
+                    tasks_to_resume.append(task_id)
+                elif not platform:
+                    tasks_to_resume.append(task_id)
+
+        for task_id in tasks_to_resume:
+            task = self.paused_tasks[task_id]
+            task['status'] = 'initiated'
+            task['priority'] = task.get('priority', Priority.NORMAL)
+            self.task_queue.put((task['priority'], task))
+            self.current_tasks[task_id] = task
+            self._persist_task(task)
+            resumed_tasks.append(task_id)
+            logger.info(f"Tarea {task_id} reanudada manualmente para canal {channel_id}")
+            activity_logger.info(f"Tarea {task_id} reanudada manualmente para canal {channel_id}")
+
+        for task_id in resumed_tasks:
+            del self.paused_tasks[task_id]
+
+        return {
+            'success': True,
+            'resumed_tasks': resumed_tasks,
+            'message': f"{len(resumed_tasks)} tareas reanudadas para canal {channel_id}"
+        }
+
+    def update_platform_credentials(self, platform: str, credentials: Dict) -> bool:
+        """Actualiza las credenciales de una plataforma manualmente"""
+        if platform not in self.config.get('platforms', {}):
+            logger.error(f"Plataforma {platform} no encontrada en la configuración")
+            return False
+
+        try:
+            self._save_platform_credentials(platform, credentials)
+            self.config['platforms'][platform].update(credentials)
+            logger.info(f"Credenciales actualizadas manualmente para {platform}")
+            activity_logger.info(f"Credenciales actualizadas manualmente para {platform}")
+
+            # Verificar autenticación si es una plataforma OAuth
+            if platform in self.oauth_platforms:
+                if not self._initialize_oauth_platform(platform):
+                    logger.error(f"Error al verificar nuevas credenciales para {platform}")
+                    return False
+
+            return True
+        except Exception as e:
+            logger.error(f"Error al actualizar credenciales para {platform}: {str(e)}")
+            return False
+
 if __name__ == "__main__":
-    os.makedirs('logs', exist_ok=True)
-    os.makedirs('config', exist_ok=True)
-    
     orchestrator = Orchestrator()
-    success = orchestrator.start()
-    print(f"Orchestrator iniciado: {success}")
-    
-    if success and orchestrator.channels:
-        channel_id = list(orchestrator.channels.keys())[0]
-        result = orchestrator.create_content(channel_id)
-        print(f"Tarea creada: {result}")
+    orchestrator.start()
