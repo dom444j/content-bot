@@ -1,0 +1,223 @@
+{
+  "youtube": {
+    "api_key": "YOUR_YOUTUBE_API_KEY",
+    "client_id": "YOUR_YOUTUBE_CLIENT_ID",
+    "client_secret": "YOUR_YOUTUBE_CLIENT_SECRET",
+    "refresh_token": "YOUR_YOUTUBE_REFRESH_TOKEN",
+    "channel_id": "YOUR_YOUTUBE_CHANNEL_ID",
+    "quota_limit": 10000,
+    "quota_reset": "daily",
+    "endpoints": {
+      "videos": "https://www.googleapis.com/youtube/v3/videos",
+      "channels": "https://www.googleapis.com/youtube/v3/channels",
+      "search": "https://www.googleapis.com/youtube/v3/search",
+      "comments": "https://www.googleapis.com/youtube/v3/comments",
+      "analytics": "https://youtubeanalytics.googleapis.com/v2/reports"
+    },
+    "upload_settings": {
+      "default_privacy": "public",
+      "default_category": 22,
+      "default_language": "es"
+    },
+    "rate_limits": {
+      "uploads_per_day": 10,
+      "comments_per_minute": 5
+    }
+  },
+  "tiktok": {
+    "api_key": "YOUR_TIKTOK_API_KEY",
+    "client_key": "YOUR_TIKTOK_CLIENT_KEY",
+    "client_secret": "YOUR_TIKTOK_CLIENT_SECRET",
+    "access_token": "YOUR_TIKTOK_ACCESS_TOKEN",
+    "open_id": "YOUR_TIKTOK_OPEN_ID",
+    "endpoints": {
+      "video_upload": "https://open.tiktokapis.com/v2/post/publish/video/init/",
+      "video_info": "https://open.tiktokapis.com/v2/video/query/",
+      "user_info": "https://open.tiktokapis.com/v2/user/info/",
+      "comments": "https://open.tiktokapis.com/v2/comment/list/"
+    },
+    "rate_limits": {
+      "uploads_per_day": 100,
+      "comments_per_minute": 10
+    }
+  },
+  "instagram": {
+    "api_key": "YOUR_INSTAGRAM_API_KEY",
+    "client_id": "YOUR_INSTAGRAM_CLIENT_ID",
+    "client_secret": "YOUR_INSTAGRAM_CLIENT_SECRET",
+    "access_token": "YOUR_INSTAGRAM_ACCESS_TOKEN",
+    "user_id": "YOUR_INSTAGRAM_USER_ID",
+    "endpoints": {
+      "media": "https://graph.instagram.com/me/media",
+      "insights": "https://graph.instagram.com/insights",
+      "user": "https://graph.instagram.com/me"
+    },
+    "rate_limits": {
+      "uploads_per_day": 25,
+      "comments_per_hour": 60
+    }
+  },
+  "threads": {
+    "api_key": "YOUR_THREADS_API_KEY",
+    "access_token": "YOUR_THREADS_ACCESS_TOKEN",
+    "user_id": "YOUR_THREADS_USER_ID",
+    "endpoints": {
+      "post": "https://graph.threads.com/v1/post",
+      "user": "https://graph.threads.com/v1/user"
+    },
+    "rate_limits": {
+      "posts_per_day": 50,
+      "replies_per_hour": 30
+    }
+  },
+  "bluesky": {
+    "handle": "YOUR_BLUESKY_HANDLE",
+    "password": "YOUR_BLUESKY_PASSWORD",
+    "app_password": "YOUR_BLUESKY_APP_PASSWORD",
+    "endpoints": {
+      "post": "https://bsky.social/xrpc/com.atproto.repo.createRecord",
+      "feed": "https://bsky.social/xrpc/app.bsky.feed.getTimeline"
+    },
+    "rate_limits": {
+      "posts_per_hour": 20
+    }
+  },
+  "leonardo_ai": {
+    "api_key": "YOUR_LEONARDO_API_KEY",
+    "user_id": "YOUR_LEONARDO_USER_ID",
+    "tier": "free",
+    "tokens_per_day": 150,
+    "endpoints": {
+      "generate": "https://cloud.leonardo.ai/api/rest/v1/generations",
+      "models": "https://cloud.leonardo.ai/api/rest/v1/models"
+    }
+  },
+  "midjourney": {
+    "api_key": "YOUR_MIDJOURNEY_API_KEY",
+    "discord_token": "YOUR_DISCORD_TOKEN",
+    "channel_id": "YOUR_DISCORD_CHANNEL_ID",
+    "tier": "basic",
+    "fast_time": 1,
+    "relax_time": 5,
+    "endpoints": {
+      "imagine": "/api/imagine",
+      "variation": "/api/variation",
+      "upscale": "/api/upscale"
+    }
+  },
+  "elevenlabs": {
+    "api_key": "YOUR_ELEVENLABS_API_KEY",
+    "user_id": "YOUR_ELEVENLABS_USER_ID",
+    "tier": "starter",
+    "characters_per_month": 10000,
+    "endpoints": {
+      "text_to_speech": "https://api.elevenlabs.io/v1/text-to-speech",
+      "voices": "https://api.elevenlabs.io/v1/voices"
+    }
+  },
+  "runwayml": {
+    "api_key": "YOUR_RUNWAYML_API_KEY",
+    "tier": "standard",
+    "endpoints": {
+      "generate": "https://api.runwayml.com/v1/generate",
+      "models": "https://api.runwayml.com/v1/models"
+    }
+  },
+  "canva": {
+    "api_key": "YOUR_CANVA_API_KEY",
+    "client_id": "YOUR_CANVA_CLIENT_ID",
+    "client_secret": "YOUR_CANVA_CLIENT_SECRET",
+    "tier": "pro",
+    "endpoints": {
+      "designs": "https://api.canva.com/v1/designs",
+      "templates": "https://api.canva.com/v1/templates"
+    }
+  },
+  "grok": {
+    "api_key": "YOUR_GROK_API_KEY",
+    "model": "grok-3",
+    "endpoints": {
+      "completions": "https://api.grok.ai/v1/completions",
+      "chat": "https://api.grok.ai/v1/chat/completions"
+    },
+    "rate_limits": {
+      "requests_per_minute": 60
+    }
+  },
+  "openai": {
+    "api_key": "YOUR_OPENAI_API_KEY",
+    "organization": "YOUR_OPENAI_ORG_ID",
+    "models": {
+      "text": "gpt-4o",
+      "vision": "gpt-4-vision-preview"
+    },
+    "endpoints": {
+      "completions": "https://api.openai.com/v1/completions",
+      "chat": "https://api.openai.com/v1/chat/completions",
+      "embeddings": "https://api.openai.com/v1/embeddings"
+    },
+    "rate_limits": {
+      "tokens_per_minute": 10000
+    }
+  },
+  "aws": {
+    "access_key": "YOUR_AWS_ACCESS_KEY",
+    "secret_key": "YOUR_AWS_SECRET_KEY",
+    "region": "us-east-1",
+    "s3_bucket": "content-bot-assets",
+    "ec2_instance": "i-0123456789abcdef0",
+    "services": {
+      "s3": "https://s3.amazonaws.com",
+      "ec2": "https://ec2.amazonaws.com",
+      "lambda": "https://lambda.amazonaws.com"
+    }
+  },
+  "mongodb": {
+    "connection_string": "mongodb+srv://username:password@cluster.mongodb.net/content-bot",
+    "database": "content-bot",
+    "collections": {
+      "channels": "channels",
+      "videos": "videos",
+      "ctas": "ctas",
+      "assets": "assets",
+      "metrics": "metrics",
+      "experiments": "experiments"
+    }
+  },
+  "timescaledb": {
+    "host": "timescale.example.com",
+    "port": 5432,
+    "username": "timescale_user",
+    "password": "YOUR_TIMESCALEDB_PASSWORD",
+    "database": "analytics",
+    "tables": {
+      "metrics": "metrics",
+      "events": "events",
+      "engagement": "engagement"
+    }
+  },
+  "google_trends": {
+    "api_key": "YOUR_GOOGLE_TRENDS_API_KEY",
+    "endpoints": {
+      "trending_searches": "https://trends.google.com/trends/api/dailytrends",
+      "interest_over_time": "https://trends.google.com/trends/api/interestovertime"
+    },
+    "rate_limits": {
+      "requests_per_day": 1000
+    }
+  },
+  "twitter": {
+    "api_key": "YOUR_TWITTER_API_KEY",
+    "api_secret": "YOUR_TWITTER_API_SECRET",
+    "bearer_token": "YOUR_TWITTER_BEARER_TOKEN",
+    "access_token": "YOUR_TWITTER_ACCESS_TOKEN",
+    "access_token_secret": "YOUR_TWITTER_ACCESS_TOKEN_SECRET",
+    "endpoints": {
+      "trends": "https://api.twitter.com/2/trends/place",
+      "search": "https://api.twitter.com/2/tweets/search/recent"
+    },
+    "rate_limits": {
+      "requests_per_15min": 450
+    }
+  }
+}

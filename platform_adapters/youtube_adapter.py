@@ -19,6 +19,9 @@ from googleapiclient.errors import HttpError
 from typing import Dict, List, Any, Optional, Union, Tuple
 from datetime import datetime, timedelta
 
+# Importar el cargador de configuraciones
+from utils.config_loader import get_platform_credentials
+
 # Configurar logging
 logging.basicConfig(
     level=logging.INFO,
@@ -42,8 +45,8 @@ class YouTubeAdapter:
         Args:
             config_path: Ruta al archivo de configuración con credenciales
         """
-        self.config_path = config_path
-        self.config = self._load_config()
+        # Usar get_platform_credentials en lugar de cargar directamente el archivo JSON
+        self.config = get_platform_credentials('youtube')
         self.credentials = None
         self.youtube = None
         self.youtube_analytics = None
@@ -51,20 +54,7 @@ class YouTubeAdapter:
         self.quota_reset_time = datetime.now() + timedelta(days=1)
         self.initialize_api()
     
-    def _load_config(self) -> Dict[str, Any]:
-        """
-        Carga la configuración desde el archivo
-        
-        Returns:
-            Configuración de YouTube
-        """
-        try:
-            with open(self.config_path, 'r', encoding='utf-8') as f:
-                config = json.load(f)
-                return config.get('youtube', {})
-        except Exception as e:
-            logger.error(f"Error al cargar configuración: {str(e)}")
-            return {}
+    # Eliminar el método _load_config ya que ahora usamos get_platform_credentials
     
     def initialize_api(self) -> bool:
         """
