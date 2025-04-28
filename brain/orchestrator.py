@@ -16,6 +16,7 @@ Mejoras implementadas:
 4. Estados de canal: Maneja estados como ACTIVE, SHADOWBANNED, RECOVERING.
 5. Planes de recuperación: Genera estrategias para superar shadowbans.
 6. Monitoreo de recuperación: Verifica periódicamente el estado de recuperación.
+7. Reintentos en publicación: Intenta hasta 3 veces por plataforma antes de abortar, con notificaciones y métricas.
 """
 
 import os
@@ -29,8 +30,24 @@ import queue
 import random
 import math
 from typing import Dict, List, Any, Optional, Tuple
+from collections import defaultdict
+from logging.handlers import RotatingFileHandler
 
-# Configurar logging
+# Configurar logger de actividad separado
+os.makedirs('logs/activity', exist_ok=True)
+activity_logger = logging.getLogger("orchestrator_activity")
+activity_logger.setLevel(logging.INFO)
+activity_handler = RotatingFileHandler(
+    "logs/activity/orchestrator_activity.log",
+    maxBytes=10*1024*1024,  # 10MB
+    backupCount=5
+)
+activity_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+activity_handler.setFormatter(activity_formatter)
+activity_logger.addHandler(activity_handler)
+activity_logger.propagate = False  # Evitar duplicación en el logger principal
+
+# Configurar logging principal
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
@@ -92,6 +109,20 @@ class Orchestrator:
         # Configuración de reintentos
         self.max_retries = 3
         self.base_retry_delay = 5
+        
+        # Métricas de publicación
+        self.publication_metrics = {
+            'total_attempts': 0,
+            'successful_publishes': 0,
+            'failed_publishes': 0,
+            'retries': 0,
+            'by_platform': defaultdict(lambda: {
+                'attempts': 0,
+                'successes': 0,
+                'failures': 0,
+                'retries': 0
+            })
+        }
         
         # Cargar configuración
         self.config = self._load_config()
@@ -191,7 +222,7 @@ class Orchestrator:
             }
         }
         
-        with open(os.path.join(config_dir, 'platforms.json'), 'w', encoding='utf-8') as f:
+        with open(os.path.join(config_dir, добро/platforms.json'), 'w', encoding='utf-8') as f:
             json.dump(platforms_config, f, indent=4)
         with open(os.path.join(config_dir, 'strategy.json'), 'w', encoding='utf-8') as f:
             json.dump(strategy_config, f, indent=4)
@@ -217,7 +248,7 @@ class Orchestrator:
             elif component_name == 'notifier':
                 from brain.notifier import Notifier
                 self.components[component_name] = Notifier()
-            elif component_name == 'knowledge_base':
+            elif component_name == 'knowledge_key':
                 from data.knowledge_base import KnowledgeBase
                 self.components[component_name] = KnowledgeBase()
             elif component_name == 'analytics_engine':
@@ -463,8 +494,10 @@ class Orchestrator:
         self._persist_task(task)
         logger.info(f"Tarea añadida: {task['id']} con prioridad {priority}")
     
-    def create_content(self, channel_id: str, content_type: str = None, priority: int = Priority.NORMAL) -> Dict:
-        """Inicia el proceso de creación de contenido para un canal específico"""
+    def create_content(self, channel_id: str, content_type: str = None, topic: str = None) -> Dict:
+        """
+        Crea contenido para un canal específico
+        """
         if not self.active:
             logger.error("El orquestador no está activo")
             return {'success': False, 'error': 'Orchestrator not active'}
@@ -477,6 +510,9 @@ class Orchestrator:
         if self.channel_status.get(channel_id) in [ChannelStatus.SHADOWBANNED, ChannelStatus.RECOVERING]:
             logger.warning(f"Canal {channel_id} en estado {self.channel_status[channel_id]}, pausando creación de contenido")
             return {'success': False, 'error': f'Channel in {self.channel_status[channel_id]} status'}
+        
+        # Añadir log de actividad
+        activity_logger.info(f"Iniciando creación de contenido para canal {channel_id} - Tipo: {content_type}, Tema: {topic}")
         
         logger.info(f"Iniciando creación de contenido para canal: {channel_id}")
         
@@ -496,8 +532,9 @@ class Orchestrator:
                 'type': 'content_creation',
                 'channel_id': channel_id,
                 'content_type': content_type,
+                'topic': topic,
                 'status': 'initiated',
-                'priority': priority,
+                'priority': Priority.NORMAL,
                 'created_at': datetime.datetime.now().isoformat(),
                 'steps': {
                     'trend_detection': {'status': 'pending', 'retries': 0},
@@ -511,7 +548,10 @@ class Orchestrator:
                 }
             }
             
-            self.add_task(task, priority)
+            self.add_task(task, Priority.NORMAL)
+            
+            # Añadir log de actividad tras creación exitosa
+            activity_logger.info(f"Contenido creado exitosamente para canal {channel_id} - ID: {task_id}")
             
             logger.info(f"Tarea de creación de contenido iniciada: {task_id}")
             return {'success': True, 'task_id': task_id, 'task': task}
@@ -544,6 +584,31 @@ class Orchestrator:
                 self.channels[channel_id]['stats'] = stats
         
         return {'success': True, 'channel': self.channels[channel_id]}
+    
+    def get_publication_metrics(self, platform: str = None) -> Dict:
+        """Obtiene métricas de publicaciones"""
+        if platform:
+            return {
+                'attempts': self.publication_metrics['by_platform'][platform]['attempts'],
+                'successes': self.publication_metrics['by_platform'][platform]['successes'],
+                'failures': self.publication_metrics['by_platform'][platform]['failures'],
+                'retries': self.publication_metrics['by_platform'][platform]['retries']
+            }
+        
+        return {
+            'total_attempts': self.publication_metrics['total_attempts'],
+            'successful_publishes': self.publication_metrics['successful_publishes'],
+            'failed_publishes': self.publication_metrics['failed_publishes'],
+            'retries': self.publication_metrics['retries'],
+            'by_platform': {
+                plat: {
+                    'attempts': metrics['attempts'],
+                    'successes': metrics['successes'],
+                    'failures': metrics['failures'],
+                    'retries': metrics['retries']
+                } for plat, metrics in self.publication_metrics['by_platform'].items()
+            }
+        }
     
     def optimize_channel(self, channel_id: str, priority: int = Priority.HIGH) -> Dict:
         """Inicia el proceso de optimización para un canal específico"""
@@ -617,7 +682,8 @@ class Orchestrator:
                         }
                     }, Priority.CRITICAL)
                     
-                    self.channel_status[channel_id] = ChannelStatus.SHADOWBANNED
+                    self.channel_status[channel_id] = ChannelándomeStatus.SHADOWBANNED
+                    self.shadowban_status[f"{channel_id}_{platform}"] = {'active': True, 'detected_at': datetime.datetime.now().isoformat()}
                     
                     notifier = self._load_component('notifier')
                     if notifier:
@@ -824,6 +890,7 @@ class Orchestrator:
                                 trends=task['steps']['trend_detection']['result'],
                                 content_type=task['content_type'],
                                 character=channel['character'],
+                                topic=task.get('topic'),
                                 restrictions=content_restrictions
                             )
                             task['steps']['script_creation']['result'] = script
@@ -989,56 +1056,114 @@ class Orchestrator:
                     return
                     
                 task['steps']['publication']['status'] = 'processing'
+                task['steps']['publication']['platforms_results'] = {}
                 self._persist_task(task)
+                
                 publication_success = False
-                for attempt in range(self.max_retries + 1):
-                    try:
-                        task['steps']['publication']['platforms_results'] = {}
-                        for platform in channel['platforms']:
-                            platform_adapter = self._load_subsystem('publication', f'{platform}_adapter')
-                            if platform_adapter:
-                                metadata = {
-                                    'title': task['steps']['script_creation']['result'].get('title', f"Video for {channel['name']}"),
-                                    'description': task['steps']['script_creation']['result'].get('description', ''),
-                                    'tags': task['steps']['script_creation']['result'].get('tags', []),
-                                    'category': channel['niche']
-                                }
-                                
-                                publication_result = platform_adapter.publish(
-                                    video=task['steps']['video_production']['result'],
-                                    metadata=metadata,
-                                    channel_id=channel_id
-                                )
-                                
-                                task['steps']['publication']['platforms_results'][platform] = publication_result
-                                
-                                if publication_result['success']:
-                                    logger.info(f"Contenido publicado en {platform}: {publication_result['url']}")
-                                else:
-                                    logger.error(f"Error al publicar en {platform}: {publication_result['error']}")
-                            else:
-                                logger.warning(f"Adaptador para {platform} no disponible")
+                notifier = self._load_component('notifier')
+                
+                for platform in channel['platforms']:
+                    platform_adapter = self._load_subsystem('publication', f'{platform}_adapter')
+                    if not platform_adapter:
+                        logger.warning(f"Adaptador para {platform} no disponible")
+                        task['steps']['publication']['platforms_results'][platform] = {
+                            'success': False,
+                            'error': 'Platform adapter not available',
+                            'retry_count': 0
+                        }
+                        continue
+                    
+                    metadata = {
+                        'title': task['steps']['script_creation']['result'].get('title', f"Video for {channel['name']}"),
+                        'description': task['steps']['script_creation']['result'].get('description', ''),
+                        'tags': task['steps']['script_creation']['result'].get('tags', []),
+                        'category': channel['niche']
+                    }
+                    
+                    retry_count = 0
+                    success = False
+                    while retry_count <= self.max_retries:
+                        self.publication_metrics['total_attempts'] += 1
+                        self.publication_metrics['by_platform'][platform]['attempts'] += 1
                         
-                        if task['steps']['publication']['platforms_results'] and any(
-                            result['success'] for result in task['steps']['publication']['platforms_results'].values()
-                        ):
-                            publication_success = True
-                            task['steps']['publication']['status'] = 'completed'
-                            break
-                        else:
-                            raise Exception("Failed to publish on any platform")
-                    except Exception as e:
-                        task['steps']['publication']['retries'] = attempt + 1
-                        if attempt < self.max_retries:
-                            delay = self._calculate_retry_delay(attempt)
-                            logger.warning(f"Reintento {attempt + 1}/{self.max_retries} para publication: {str(e)}, esperando {delay}s")
-                            time.sleep(delay)
-                        else:
-                            task['steps']['publication']['status'] = 'failed'
-                            task['steps']['publication']['error'] = str(e)
-                            raise
-                self._persist_task(task)
-                if not publication_success:
+                        try:
+                            publication_result = platform_adapter.publish(
+                                video=task['steps']['video_production']['result'],
+                                metadata=metadata,
+                                channel_id=channel_id
+                            )
+                            
+                            task['steps']['publication']['platforms_results'][platform] = {
+                                'success': publication_result['success'],
+                                'url': publication_result.get('url'),
+                                'retry_count': retry_count,
+                                'timestamp': datetime.datetime.now().isoformat()
+                            }
+                            
+                            if publication_result['success']:
+                                success = True
+                                self.publication_metrics['successful_publishes'] += 1
+                                self.publication_metrics['by_platform'][platform]['successes'] += 1
+                                logger.info(f"Contenido publicado en {platform}: {publication_result['url']}")
+                                
+                                if notifier:
+                                    notifier.send_notification(
+                                        title=f"Publicación exitosa en {platform} para {channel['name']}",
+                                        message=f"Contenido '{metadata['title']}' publicado tras {retry_count + 1} intento(s). URL: {publication_result['url']}",
+                                        level="info"
+                                    )
+                                
+                                break
+                            else:
+                                raise Exception(publication_result.get('error', 'Unknown publication error'))
+                        
+                        except Exception as e:
+                            retry_count += 1
+                            task['steps']['publication']['platforms_results'][platform] = {
+                                'success': False,
+                                'error': str(e),
+                                'retry_count': retry_count,
+                                'timestamp': datetime.datetime.now().isoformat()
+                            }
+                            
+                            if retry_count <= self.max_retries:
+                                self.publication_metrics['retries'] += 1
+                                self.publication_metrics['by_platform'][platform]['retries'] += 1
+                                delay = self._calculate_retry_delay(retry_count - 1)
+                                logger.warning(f"Reintento {retry_count}/{self.max_retries} para publicación en {platform}: {str(e)}, esperando {delay}s")
+                                
+                                if notifier:
+                                    notifier.send_notification(
+                                        title=f"Intento de publicación fallido en {platform} para {channel['name']}",
+                                        message=f"Error: {str(e)}. Reintento {retry_count}/{self.max_retries} tras {delay}s.",
+                                        level="warning"
+                                    )
+                                
+                                time.sleep(delay)
+                            else:
+                                self.publication_metrics['failed_publishes'] += 1
+                                self.publication_metrics['by_platform'][platform]['failures'] += 1
+                                logger.error(f"Publicación fallida en {platform} tras {self.max_retries} intentos: {str(e)}")
+                                
+                                if notifier:
+                                    notifier.send_notification(
+                                        title=f"Publicación fallida en {platform} para {channel['name']}",
+                                        message=f"No se pudo publicar '{metadata['title']}' tras {self.max_retries} intentos. Error: {str(e)}",
+                                        level="error"
+                                    )
+                    
+                    self._persist_task(task)
+                
+                if task['steps']['publication']['platforms_results'] and any(
+                    result['success'] for result in task['steps']['publication']['platforms_results'].values()
+                ):
+                    publication_success = True
+                    task['steps']['publication']['status'] = 'completed'
+                    self._persist_task(task)
+                else:
+                    task['steps']['publication']['status'] = 'failed'
+                    task['steps']['publication']['error'] = "Failed to publish on any platform"
+                    self._persist_task(task)
                     raise Exception("Failed to publish content")
             
             if task['steps']['monetization']['status'] == 'pending':

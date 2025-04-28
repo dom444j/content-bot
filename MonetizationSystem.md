@@ -185,7 +185,8 @@ content-bot/
 │   ├── activity/              # Actividad del sistema
 │   │   ├── uploads/           # Registro de subidas
 │   │   ├── monetization/      # Registro de monetización
-│   │   └── engagement/        # Registro de interacciones
+│   │   ├── engagement/        # Registro de interacciones
+│   │   └── orchestrator_activity.log # Decisiones del orquestador ✅
 │   ├── errors.log             # Archivo principal de errores
 │   └── performance.log        # Archivo principal de métricas
 ├── config/                    # Configuraciones
