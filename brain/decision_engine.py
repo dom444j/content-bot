@@ -1,11 +1,12 @@
 """
 Decision Engine - Motor de decisiones y auto-mejoras
 
-Este módulo implementa algoritmos de aprendizaje por refuerzo:
-- Contextual bandits para optimización de CTAs
-- Auto-mejoras para visuales y voces
-- Redistribución de tráfico basada en ROI
-- Optimización en tiempo real de estrategias
+Este módulo implementa algoritmos avanzados de aprendizaje por refuerzo:
+- Contextual bandits (LinUCB) para optimización de CTAs, visuales y voces
+- Auto-mejoras basadas en métricas históricas y en tiempo real
+- Redistribución de tráfico optimizada por ROI
+- Sistema de reintentos automáticos para robustez
+- Integración profunda con KnowledgeBase para aprendizaje continuo
 """
 
 import os
@@ -17,17 +18,21 @@ import datetime
 import numpy as np
 from typing import Dict, List, Any, Optional, Tuple
 import time
+from functools import wraps
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+import scipy.stats as stats
 
 # Añadir directorio raíz al path para importaciones
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 # Importar componentes necesarios
 from data.knowledge_base import KnowledgeBase
+from utils.config_loader import get_config
 
 # Configurar logging
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s - %(context)s',
     handlers=[
         logging.FileHandler(os.path.join('logs', 'decision_engine.log')),
         logging.StreamHandler()
@@ -36,10 +41,97 @@ logging.basicConfig(
 
 logger = logging.getLogger('DecisionEngine')
 
+class DecisionEngineError(Exception):
+    """Excepción personalizada para errores del motor de decisiones"""
+    pass
+
+class ContextValidationError(DecisionEngineError):
+    """Excepción para errores de validación de contexto"""
+    pass
+
+def retry_on_failure(func):
+    """Decorador para reintentos automáticos en operaciones críticas"""
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=1, max=10),
+        retry=retry_if_exception_type((ConnectionError, TimeoutError, DecisionEngineError)),
+        before_sleep=lambda retry_state: logger.warning(
+            f"Reintentando {func.__name__} (intento {retry_state.attempt_number})..."
+        )
+    )
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        return func(*args, **kwargs)
+    return wrapper
+
+class LinUCBBandit:
+    """Implementación de bandit contextual basado en LinUCB"""
+    
+    def __init__(self, feature_dim: int, alpha: float = 1.0):
+        """
+        Inicializa el bandit LinUCB
+        
+        Args:
+            feature_dim: Dimensión del vector de características
+            alpha: Parámetro de exploración
+        """
+        self.alpha = alpha
+        self.feature_dim = feature_dim
+        # Matriz A para cada acción (inicialmente identidad)
+        self.A = {}
+        # Vector b para cada acción (inicialmente ceros)
+        self.b = {}
+        # Theta estimado para cada acción
+        self.theta = {}
+    
+    def add_action(self, action: str):
+        """Añade una nueva acción al bandit"""
+        if action not in self.A:
+            self.A[action] = np.identity(self.feature_dim)
+            self.b[action] = np.zeros(self.feature_dim)
+            self.theta[action] = np.zeros(self.feature_dim)
+    
+    def select_action(self, context: np.ndarray) -> str:
+        """
+        Selecciona la mejor acción usando LinUCB
+        
+        Args:
+            context: Vector de características del contexto
+            
+        Returns:
+            Acción seleccionada
+        """
+        if not self.A:
+            return None
+            
+        scores = {}
+        for action in self.A:
+            A_inv = np.linalg.inv(self.A[action])
+            self.theta[action] = A_inv @ self.b[action]
+            mean = context @ self.theta[action]
+            variance = np.sqrt(context.T @ A_inv @ context)
+            scores[action] = mean + self.alpha * variance
+        
+        return max(scores.items(), key=lambda x: x[1])[0]
+    
+    def update(self, action: str, context: np.ndarray, reward: float):
+        """
+        Actualiza los parámetros del bandit
+        
+        Args:
+            action: Acción tomada
+            context: Vector de características
+            reward: Recompensa obtenida
+        """
+        if action in self.A:
+            context = context.reshape(-1, 1)
+            self.A[action] += context @ context.T
+            self.b[action] += reward * context.flatten()
+
 class DecisionEngine:
     """
-    Motor de decisiones que implementa algoritmos de aprendizaje por refuerzo
-    para optimizar CTAs, visuales, voces y estrategias de monetización.
+    Motor de decisiones avanzado con aprendizaje por refuerzo
+    y auto-mejoras optimizadas
     """
     
     _instance = None
@@ -55,7 +147,7 @@ class DecisionEngine:
         if self._initialized:
             return
             
-        logger.info("Inicializando Decision Engine...")
+        logger.info("Inicializando Decision Engine...", extra={'context': 'init'})
         
         # Cargar base de conocimiento
         self.kb = KnowledgeBase()
@@ -64,47 +156,65 @@ class DecisionEngine:
         self.strategy_file = os.path.join('config', 'strategy.json')
         self.strategy = self._load_strategy()
         
-        # Configuración de bandits contextuales
+        # Configuración de bandits contextuales (LinUCB)
         self.bandits_config = self.strategy.get('optimization_strategies', {}).get('contextual_bandits', {})
-        self.exploration_rate = self.bandits_config.get('exploration_rate', 0.2)
+        self.exploration_alpha = self.bandits_config.get('exploration_alpha', 1.0)
+        self.feature_dim = self.bandits_config.get('feature_dim', 20)
         self.learning_rate = self.bandits_config.get('learning_rate', 0.1)
-        self.reward_metrics = self.bandits_config.get('reward_metrics', {})
+        self.reward_metrics = self.bandits_config.get('reward_metrics', {
+            'ctr': 0.4,
+            'conversion_rate': 0.3,
+            'engagement_rate': 0.2,
+            'retention_rate': 0.1
+        })
         
-        # Estado de los bandits
-        self.cta_bandits = {}  # Por nicho y plataforma
-        self.visual_bandits = {}  # Por nicho y plataforma
-        self.voice_bandits = {}  # Por nicho y personaje
+        # Estado de los bandits (LinUCB)
+        self.cta_bandits: Dict[str, LinUCBBandit] = {}
+        self.visual_bandits: Dict[str, LinUCBBandit] = {}
+        self.voice_bandits: Dict[str, LinUCBBandit] = {}
         
         # Configuración de redistribución de tráfico
         self.redistribution_config = self.strategy.get('optimization_strategies', {}).get('traffic_redistribution', {})
         self.ctr_threshold = self.redistribution_config.get('ctr_threshold', 0.05)
         self.roi_threshold = self.redistribution_config.get('roi_threshold', 50)
         
-        # Cargar datos históricos si existen
+        # Configuración de métricas avanzadas
+        self.metrics_config = self.strategy.get('metrics', {
+            'confidence_threshold': 0.95,
+            'min_samples': 100,
+            'performance_window_days': 7
+        })
+        
+        # Cache para decisiones recientes
+        self.decision_cache: Dict[str, Dict] = {}
+        self.cache_timeout = 3600  # 1 hora en segundos
+        
+        # Cargar datos históricos
         self._load_bandit_state()
         
         self._initialized = True
-        logger.info("Decision Engine inicializado correctamente")
+        logger.info("Decision Engine inicializado correctamente", extra={'context': 'init'})
     
+    @retry_on_failure
     def _load_strategy(self) -> Dict[str, Any]:
         """Carga la configuración de estrategia desde el archivo JSON"""
         try:
-            if os.path.exists(self.strategy_file):
-                with open(self.strategy_file, 'r', encoding='utf-8') as f:
-                    return json.load(f)
-            else:
-                logger.warning(f"Archivo de estrategia no encontrado: {self.strategy_file}")
-                return self._create_default_strategy()
-        except Exception as e:
-            logger.error(f"Error al cargar estrategia: {str(e)}")
+            config = get_config(self.strategy_file)
+            if config:
+                return config
+            logger.warning(f"Archivo de estrategia no encontrado: {self.strategy_file}")
             return self._create_default_strategy()
+        except Exception as e:
+            logger.error(f"Error al cargar estrategia: {str(e)}", extra={'context': 'strategy_load'})
+            raise DecisionEngineError(f"Error al cargar estrategia: {str(e)}")
     
     def _create_default_strategy(self) -> Dict[str, Any]:
         """Crea una configuración de estrategia por defecto"""
         default_strategy = {
             "optimization_strategies": {
                 "contextual_bandits": {
-                    "exploration_rate": 0.2,
+                    "exploration_alpha": 1.0,
+                    "feature_dim": 20,
                     "learning_rate": 0.1,
                     "reward_metrics": {
                         "ctr": 0.4,
@@ -118,6 +228,11 @@ class DecisionEngine:
                     "roi_threshold": 50,
                     "redistribution_interval_days": 7
                 }
+            },
+            "metrics": {
+                "confidence_threshold": 0.95,
+                "min_samples": 100,
+                "performance_window_days": 7
             },
             "cta_strategies": {
                 "timing": {
@@ -137,56 +252,102 @@ class DecisionEngine:
             }
         }
         
-        # Guardar estrategia por defecto
         os.makedirs(os.path.dirname(self.strategy_file), exist_ok=True)
         with open(self.strategy_file, 'w', encoding='utf-8') as f:
             json.dump(default_strategy, f, indent=4)
         
         return default_strategy
     
+    @retry_on_failure
     def _load_bandit_state(self):
         """Carga el estado de los bandits desde la base de conocimiento"""
         try:
-            bandit_state = self.kb.get_bandit_state()
+            bandit_state = self.kb.get_from_mongodb('bandits', {'type': 'state'})
             if bandit_state:
-                self.cta_bandits = bandit_state.get('cta_bandits', {})
-                self.visual_bandits = bandit_state.get('visual_bandits', {})
-                self.voice_bandits = bandit_state.get('voice_bandits', {})
-                logger.info("Estado de bandits cargado correctamente")
+                for bandit_type in ['cta_bandits', 'visual_bandits', 'voice_bandits']:
+                    bandit_data = bandit_state.get(bandit_type, {})
+                    for key, data in bandit_data.items():
+                        bandit = LinUCBBandit(feature_dim=self.feature_dim, alpha=self.exploration_alpha)
+                        for action, params in data.items():
+                            bandit.add_action(action)
+                            bandit.A[action] = np.array(params.get('A', np.identity(self.feature_dim)))
+                            bandit.b[action] = np.array(params.get('b', np.zeros(self.feature_dim)))
+                        getattr(self, bandit_type)[key] = bandit
+                logger.info("Estado de bandits cargado correctamente", extra={'context': 'bandit_load'})
             else:
-                logger.info("No se encontró estado previo de bandits, se usarán valores iniciales")
+                logger.info("No se encontró estado previo de bandits", extra={'context': 'bandit_load'})
         except Exception as e:
-            logger.error(f"Error al cargar estado de bandits: {str(e)}")
+            logger.error(f"Error al cargar estado de bandits: {str(e)}", extra={'context': 'bandit_load'})
+            raise DecisionEngineError(f"Error al cargar estado de bandits: {str(e)}")
     
+    @retry_on_failure
     def _save_bandit_state(self):
         """Guarda el estado actual de los bandits en la base de conocimiento"""
         try:
             bandit_state = {
-                'cta_bandits': self.cta_bandits,
-                'visual_bandits': self.visual_bandits,
-                'voice_bandits': self.voice_bandits,
+                'type': 'state',
+                'cta_bandits': {
+                    key: {
+                        action: {
+                            'A': bandit.A[action].tolist(),
+                            'b': bandit.b[action].tolist()
+                        } for action in bandit.A
+                    } for key, bandit in self.cta_bandits.items()
+                },
+                'visual_bandits': {
+                    key: {
+                        action: {
+                            'A': bandit.A[action].tolist(),
+                            'b': bandit.b[action].tolist()
+                        } for action in bandit.A
+                    } for key, bandit in self.visual_bandits.items()
+                },
+                'voice_bandits': {
+                    key: {
+                        action: {
+                            'A': bandit.A[action].tolist(),
+                            'b': bandit.b[action].tolist()
+                        } for action in bandit.A
+                    } for key, bandit in self.voice_bandits.items()
+                },
                 'last_updated': datetime.datetime.now().isoformat()
             }
-            self.kb.save_bandit_state(bandit_state)
-            logger.info("Estado de bandits guardado correctamente")
+            self.kb.save_to_mongodb('bandits', bandit_state, {'type': 'state'})
+            logger.info("Estado de bandits guardado correctamente", extra={'context': 'bandit_save'})
         except Exception as e:
-            logger.error(f"Error al guardar estado de bandits: {str(e)}")
+            logger.error(f"Error al guardar estado de bandits: {str(e)}", extra={'context': 'bandit_save'})
+            raise DecisionEngineError(f"Error al guardar estado de bandits: {str(e)}")
+    
+    def _validate_context(self, context: Dict[str, Any]) -> None:
+        """Valida la integridad del contexto"""
+        required_keys = ['niche', 'platform', 'audience']
+        for key in required_keys:
+            if key not in context:
+                raise ContextValidationError(f"Clave requerida '{key}' no encontrada en el contexto")
+        
+        if not isinstance(context['audience'], dict):
+            raise ContextValidationError("El campo 'audience' debe ser un diccionario")
+        
+        audience_required = ['age_group', 'engagement_level', 'retention_rate']
+        for key in audience_required:
+            if key not in context['audience']:
+                raise ContextValidationError(f"Clave requerida '{key}' no encontrada en audience")
     
     def _get_context_features(self, context: Dict[str, Any]) -> np.ndarray:
         """
         Extrae y normaliza características del contexto para los bandits
         
         Args:
-            context: Diccionario con información contextual (nicho, plataforma, audiencia, etc.)
+            context: Diccionario con información contextual
             
         Returns:
             Vector de características normalizado
         """
-        # Extraer características relevantes
+        self._validate_context(context)
         features = []
         
         # Características de plataforma (one-hot encoding)
-        platforms = ['youtube', 'tiktok', 'instagram', 'threads', 'bluesky']
+        platforms = ['youtube', 'tiktok', 'instagram', 'threads', 'bluesky', 'x']
         platform = context.get('platform', '').lower()
         for p in platforms:
             features.append(1.0 if p == platform else 0.0)
@@ -199,398 +360,339 @@ class DecisionEngine:
         
         # Características de audiencia
         audience = context.get('audience', {})
-        features.append(audience.get('age_group', 0) / 5.0)  # Normalizado (0-5)
-        features.append(audience.get('engagement_level', 0) / 10.0)  # Normalizado (0-10)
-        features.append(audience.get('retention_rate', 0) / 100.0)  # Normalizado (0-100%)
+        features.append(audience.get('age_group', 0) / 5.0)
+        features.append(audience.get('engagement_level', 0) / 10.0)
+        features.append(audience.get('retention_rate', 0) / 100.0)
         
         # Características temporales
-        current_hour = datetime.datetime.now().hour
-        features.append(current_hour / 24.0)  # Hora normalizada (0-1)
-        current_day = datetime.datetime.now().weekday()
-        features.append(current_day / 6.0)  # Día de la semana normalizado (0-1)
+        current_time = datetime.datetime.now()
+        features.append(current_time.hour / 24.0)
+        features.append(current_time.weekday() / 6.0)
         
-        # Convertir a array numpy y asegurar que sea float32
-        return np.array(features, dtype=np.float32)
+        # Características adicionales (tendencias)
+        trend_score = context.get('trend_score', 0.5)
+        features.append(trend_score / 1.0)
+        
+        # Asegurar dimensión fija
+        while len(features) < self.feature_dim:
+            features.append(0.0)
+        
+        return np.array(features[:self.feature_dim], dtype=np.float32)
     
-    def _select_action_with_exploration(self, action_values: Dict[str, float]) -> str:
-        """
-        Selecciona una acción usando epsilon-greedy
-        
-        Args:
-            action_values: Diccionario de valores estimados para cada acción
-            
-        Returns:
-            La acción seleccionada
-        """
-        if not action_values:
-            return None
-            
-        # Exploración aleatoria
-        if random.random() < self.exploration_rate:
-            return random.choice(list(action_values.keys()))
-        
-        # Explotación (seleccionar la mejor acción)
-        return max(action_values.items(), key=lambda x: x[1])[0]
+    def _calculate_reward(self, metrics: Dict[str, float]) -> float:
+        """Calcula la recompensa ponderada basada en métricas"""
+        reward = 0.0
+        for metric_name, weight in self.reward_metrics.items():
+            if metric_name in metrics:
+                reward += weight * metrics[metric_name]
+        return max(0.0, min(1.0, reward))
     
-    def _update_action_value(self, bandit_key: str, action: str, reward: float, bandits: Dict):
-        """
-        Actualiza el valor estimado de una acción usando aprendizaje por refuerzo
-        
-        Args:
-            bandit_key: Clave del bandit (combinación de contexto)
-            action: La acción tomada
-            reward: La recompensa obtenida
-            bandits: Diccionario de bandits a actualizar
-        """
-        if bandit_key not in bandits:
-            bandits[bandit_key] = {}
-        
-        if action not in bandits[bandit_key]:
-            bandits[bandit_key][action] = {
-                'value': 0.0,
-                'count': 0
-            }
-        
-        # Actualizar valor usando regla de actualización incremental
-        current = bandits[bandit_key][action]
-        current['count'] += 1
-        current['value'] += self.learning_rate * (reward - current['value'])
+    def _initialize_bandit(self, bandit_key: str, actions: List[str], bandit_dict: Dict) -> LinUCBBandit:
+        """Inicializa un nuevo bandit LinUCB"""
+        bandit = LinUCBBandit(feature_dim=self.feature_dim, alpha=self.exploration_alpha)
+        for action in actions:
+            bandit.add_action(action)
+        bandit_dict[bandit_key] = bandit
+        return bandit
     
     def select_cta_strategy(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Selecciona la mejor estrategia de CTA para el contexto dado
+        Selecciona la mejor estrategia de CTA usando LinUCB
         
         Args:
-            context: Información contextual (nicho, plataforma, audiencia)
+            context: Información contextual
             
         Returns:
             Estrategia de CTA seleccionada
         """
-        # Crear clave para el bandit basada en nicho y plataforma
         niche = context.get('niche', 'general')
         platform = context.get('platform', 'general')
         bandit_key = f"{niche}_{platform}"
         
-        # Obtener estrategias de CTA disponibles
         cta_strategies = self.strategy.get('cta_strategies', {})
         timing_options = list(cta_strategies.get('timing', {}).keys())
         type_options = cta_strategies.get('types', [])
+        actions = [f"{timing}_{cta_type}" for timing in timing_options for cta_type in type_options]
         
-        # Inicializar valores si es necesario
         if bandit_key not in self.cta_bandits:
-            self.cta_bandits[bandit_key] = {}
-            
-            # Inicializar valores para todas las combinaciones
-            for timing in timing_options:
-                for cta_type in type_options:
-                    action_key = f"{timing}_{cta_type}"
-                    self.cta_bandits[bandit_key][action_key] = {
-                        'value': 0.5,  # Valor inicial optimista
-                        'count': 0
-                    }
+            self._initialize_bandit(bandit_key, actions, self.cta_bandits)
         
-        # Extraer valores actuales
-        action_values = {k: v['value'] for k, v in self.cta_bandits[bandit_key].items()}
-        
-        # Seleccionar acción con exploración
-        selected_action = self._select_action_with_exploration(action_values)
+        context_features = self._get_context_features(context)
+        selected_action = self.cta_bandits[bandit_key].select_action(context_features)
         
         if selected_action:
-            # Separar timing y tipo
             timing, cta_type = selected_action.split('_', 1)
-            
-            # Obtener detalles de timing
             timing_details = cta_strategies.get('timing', {}).get(timing, {})
             
-            return {
+            decision = {
                 'timing': timing,
                 'start_time': timing_details.get('start', 0),
                 'end_time': timing_details.get('end', 10),
                 'type': cta_type,
                 'bandit_key': bandit_key,
-                'action': selected_action
+                'action': selected_action,
+                'confidence': self._calculate_action_confidence(bandit_key, selected_action, 'cta')
             }
+            self.decision_cache[f"cta_{bandit_key}_{time.time()}"] = decision
+            return decision
         else:
-            # Estrategia por defecto si no hay acciones disponibles
             return {
                 'timing': 'middle',
                 'start_time': 4,
                 'end_time': 8,
                 'type': 'question',
                 'bandit_key': bandit_key,
-                'action': 'middle_question'
+                'action': 'middle_question',
+                'confidence': 0.5
             }
     
     def select_visual_strategy(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Selecciona la mejor estrategia visual para el contexto dado
+        Selecciona la mejor estrategia visual usando LinUCB
         
         Args:
-            context: Información contextual (nicho, plataforma, audiencia)
+            context: Información contextual
             
         Returns:
             Estrategia visual seleccionada
         """
-        # Crear clave para el bandit basada en nicho y plataforma
         niche = context.get('niche', 'general')
         platform = context.get('platform', 'general')
         bandit_key = f"{niche}_{platform}"
         
-        # Obtener estrategias visuales disponibles
         visual_strategies = self.strategy.get('visual_strategies', {})
         style_options = visual_strategies.get('styles', [])
         color_options = visual_strategies.get('color_schemes', [])
+        actions = [f"{style}_{color}" for style in style_options for color in color_options]
         
-        # Inicializar valores si es necesario
         if bandit_key not in self.visual_bandits:
-            self.visual_bandits[bandit_key] = {}
-            
-            # Inicializar valores para todas las combinaciones
-            for style in style_options:
-                for color in color_options:
-                    action_key = f"{style}_{color}"
-                    self.visual_bandits[bandit_key][action_key] = {
-                        'value': 0.5,  # Valor inicial optimista
-                        'count': 0
-                    }
+            self._initialize_bandit(bandit_key, actions, self.visual_bandits)
         
-        # Extraer valores actuales
-        action_values = {k: v['value'] for k, v in self.visual_bandits[bandit_key].items()}
-        
-        # Seleccionar acción con exploración
-        selected_action = self._select_action_with_exploration(action_values)
+        context_features = self._get_context_features(context)
+        selected_action = self.visual_bandits[bandit_key].select_action(context_features)
         
         if selected_action:
-            # Separar estilo y esquema de color
             style, color_scheme = selected_action.split('_', 1)
-            
-            return {
+            decision = {
                 'style': style,
                 'color_scheme': color_scheme,
                 'bandit_key': bandit_key,
-                'action': selected_action
+                'action': selected_action,
+                'confidence': self._calculate_action_confidence(bandit_key, selected_action, 'visual')
             }
+            self.decision_cache[f"visual_{bandit_key}_{time.time()}"] = decision
+            return decision
         else:
-            # Estrategia por defecto si no hay acciones disponibles
             return {
                 'style': 'vibrant',
                 'color_scheme': 'warm',
                 'bandit_key': bandit_key,
-                'action': 'vibrant_warm'
+                'action': 'vibrant_warm',
+                'confidence': 0.5
             }
     
     def select_voice_strategy(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """
-        Selecciona la mejor estrategia de voz para el contexto dado
+        Selecciona la mejor estrategia de voz usando LinUCB
         
         Args:
-            context: Información contextual (nicho, personaje, audiencia)
+            context: Información contextual
             
         Returns:
             Estrategia de voz seleccionada
         """
-        # Crear clave para el bandit basada en nicho y personaje
         niche = context.get('niche', 'general')
         character = context.get('character', 'general')
         bandit_key = f"{niche}_{character}"
         
-        # Obtener estrategias de voz disponibles
         voice_strategies = self.strategy.get('voice_strategies', {})
         tone_options = voice_strategies.get('tones', [])
         pacing_options = voice_strategies.get('pacing', [])
+        actions = [f"{tone}_{pacing}" for tone in tone_options for pacing in pacing_options]
         
-        # Inicializar valores si es necesario
         if bandit_key not in self.voice_bandits:
-            self.voice_bandits[bandit_key] = {}
-            
-            # Inicializar valores para todas las combinaciones
-            for tone in tone_options:
-                for pacing in pacing_options:
-                    action_key = f"{tone}_{pacing}"
-                    self.voice_bandits[bandit_key][action_key] = {
-                        'value': 0.5,  # Valor inicial optimista
-                        'count': 0
-                    }
+            self._initialize_bandit(bandit_key, actions, self.voice_bandits)
         
-        # Extraer valores actuales
-        action_values = {k: v['value'] for k, v in self.voice_bandits[bandit_key].items()}
-        
-        # Seleccionar acción con exploración
-        selected_action = self._select_action_with_exploration(action_values)
+        context_features = self._get_context_features(context)
+        selected_action = self.voice_bandits[bandit_key].select_action(context_features)
         
         if selected_action:
-            # Separar tono y ritmo
             tone, pacing = selected_action.split('_', 1)
-            
-            return {
+            decision = {
                 'tone': tone,
                 'pacing': pacing,
                 'bandit_key': bandit_key,
-                'action': selected_action
+                'action': selected_action,
+                'confidence': self._calculate_action_confidence(bandit_key, selected_action, 'voice')
             }
+            self.decision_cache[f"voice_{bandit_key}_{time.time()}"] = decision
+            return decision
         else:
-            # Estrategia por defecto si no hay acciones disponibles
             return {
                 'tone': 'enthusiastic',
                 'pacing': 'dynamic',
                 'bandit_key': bandit_key,
-                'action': 'enthusiastic_dynamic'
+                'action': 'enthusiastic_dynamic',
+                'confidence': 0.5
             }
     
-    def update_cta_strategy(self, bandit_key: str, action: str, metrics: Dict[str, float]):
-        """
-        Actualiza la estrategia de CTA basada en métricas de rendimiento
+    def _calculate_action_confidence(self, bandit_key: str, action: str, bandit_type: str) -> float:
+        """Calcula la confianza en la acción seleccionada"""
+        bandit_dict = getattr(self, f"{bandit_type}_bandits")
+        if bandit_key not in bandit_dict:
+            return 0.5
         
-        Args:
-            bandit_key: Clave del bandit (combinación de nicho y plataforma)
-            action: La acción tomada (combinación de timing y tipo)
-            metrics: Métricas de rendimiento (CTR, tasa de conversión, etc.)
-        """
-        # Calcular recompensa ponderada
-        reward = 0.0
-        for metric_name, weight in self.reward_metrics.items():
-            if metric_name in metrics:
-                reward += weight * metrics[metric_name]
+        bandit = bandit_dict[bandit_key]
+        if action not in bandit.A:
+            return 0.5
         
-        # Normalizar recompensa al rango [0, 1]
-        reward = max(0.0, min(1.0, reward))
-        
-        # Actualizar valor de la acción
-        self._update_action_value(bandit_key, action, reward, self.cta_bandits)
-        
-        # Guardar estado actualizado
-        self._save_bandit_state()
-        
-        logger.info(f"Actualizada estrategia CTA {action} con recompensa {reward:.4f}")
+        # Usar la varianza para estimar la confianza
+        context = np.ones(self.feature_dim)  # Contexto dummy para simplificar
+        A_inv = np.linalg.inv(bandit.A[action])
+        variance = np.sqrt(context.T @ A_inv @ context)
+        confidence = 1.0 - min(variance, 1.0)
+        return max(0.5, confidence)
     
-    def update_visual_strategy(self, bandit_key: str, action: str, metrics: Dict[str, float]):
+    @retry_on_failure
+    def update_cta_strategy(self, bandit_key: str, action: str, metrics: Dict[str, float], context: Dict[str, Any]):
         """
-        Actualiza la estrategia visual basada en métricas de rendimiento
+        Actualiza la estrategia de CTA basada en métricas
         
         Args:
-            bandit_key: Clave del bandit (combinación de nicho y plataforma)
-            action: La acción tomada (combinación de estilo y esquema de color)
-            metrics: Métricas de rendimiento (CTR, tasa de conversión, etc.)
+            bandit_key: Clave del bandit
+            action: Acción tomada
+            metrics: Métricas de rendimiento
+            context: Contexto original
         """
-        # Calcular recompensa ponderada
-        reward = 0.0
-        for metric_name, weight in self.reward_metrics.items():
-            if metric_name in metrics:
-                reward += weight * metrics[metric_name]
+        reward = self._calculate_reward(metrics)
+        context_features = self._get_context_features(context)
         
-        # Normalizar recompensa al rango [0, 1]
-        reward = max(0.0, min(1.0, reward))
+        if bandit_key in self.cta_bandits:
+            self.cta_bandits[bandit_key].update(action, context_features, reward)
         
-        # Actualizar valor de la acción
-        self._update_action_value(bandit_key, action, reward, self.visual_bandits)
-        
-        # Guardar estado actualizado
         self._save_bandit_state()
+        self.kb.update_cta_performance(f"cta_{bandit_key}_{action}", metrics)
         
-        logger.info(f"Actualizada estrategia visual {action} con recompensa {reward:.4f}")
+        logger.info(
+            f"Actualizada estrategia CTA {action} con recompensa {reward:.4f}",
+            extra={'context': f'cta_update_{bandit_key}'}
+        )
     
-    def update_voice_strategy(self, bandit_key: str, action: str, metrics: Dict[str, float]):
+    @retry_on_failure
+    def update_visual_strategy(self, bandit_key: str, action: str, metrics: Dict[str, float], context: Dict[str, Any]):
         """
-        Actualiza la estrategia de voz basada en métricas de rendimiento
+        Actualiza la estrategia visual basada en métricas
         
         Args:
-            bandit_key: Clave del bandit (combinación de nicho y personaje)
-            action: La acción tomada (combinación de tono y ritmo)
-            metrics: Métricas de rendimiento (retención, engagement, etc.)
+            bandit_key: Clave del bandit
+            action: Acción tomada
+            metrics: Métricas de rendimiento
+            context: Contexto original
         """
-        # Calcular recompensa ponderada
-        reward = 0.0
-        for metric_name, weight in self.reward_metrics.items():
-            if metric_name in metrics:
-                reward += weight * metrics[metric_name]
+        reward = self._calculate_reward(metrics)
+        context_features = self._get_context_features(context)
         
-        # Normalizar recompensa al rango [0, 1]
-        reward = max(0.0, min(1.0, reward))
+        if bandit_key in self.visual_bandits:
+            self.visual_bandits[bandit_key].update(action, context_features, reward)
         
-        # Actualizar valor de la acción
-        self._update_action_value(bandit_key, action, reward, self.voice_bandits)
-        
-        # Guardar estado actualizado
         self._save_bandit_state()
         
-        logger.info(f"Actualizada estrategia de voz {action} con recompensa {reward:.4f}")
+        logger.info(
+            f"Actualizada estrategia visual {action} con recompensa {reward:.4f}",
+            extra={'context': f'visual_update_{bandit_key}'}
+        )
+    
+    @retry_on_failure
+    def update_voice_strategy(self, bandit_key: str, action: str, metrics: Dict[str, float], context: Dict[str, Any]):
+        """
+        Actualiza la estrategia de voz basada en métricas
+        
+        Args:
+            bandit_key: Clave del bandit
+            action: Acción tomada
+            metrics: Métricas de rendimiento
+            context: Contexto original
+        """
+        reward = self._calculate_reward(metrics)
+        context_features = self._get_context_features(context)
+        
+        if bandit_key in self.voice_bandits:
+            self.voice_bandits[bandit_key].update(action, context_features, reward)
+        
+        self._save_bandit_state()
+        
+        logger.info(
+            f"Actualizada estrategia de voz {action} con recompensa {reward:.4f}",
+            extra={'context': f'voice_update_{bandit_key}'}
+        )
     
     def should_redistribute_traffic(self, channel_metrics: Dict[str, Dict[str, float]]) -> bool:
         """
         Determina si se debe redistribuir el tráfico entre canales
         
         Args:
-            channel_metrics: Métricas por canal (CTR, ROI, etc.)
+            channel_metrics: Métricas por canal
             
         Returns:
             True si se debe redistribuir, False en caso contrario
         """
-        # Verificar si hay canales con bajo CTR
         low_ctr_channels = []
+        high_roi_channels = []
+        
         for channel, metrics in channel_metrics.items():
             if metrics.get('ctr', 0) < self.ctr_threshold:
                 low_ctr_channels.append(channel)
-        
-        # Verificar si hay canales con alto ROI
-        high_roi_channels = []
-        for channel, metrics in channel_metrics.items():
             if metrics.get('roi', 0) > self.roi_threshold:
                 high_roi_channels.append(channel)
         
-        # Redistribuir si hay canales con bajo CTR y canales con alto ROI
-        return len(low_ctr_channels) > 0 and len(high_roi_channels) > 0
+        result = len(low_ctr_channels) > 0 and len(high_roi_channels) > 0
+        logger.info(
+            f"Redistribución de tráfico requerida: {result}",
+            extra={'context': 'traffic_redistribution_check'}
+        )
+        return result
     
     def get_traffic_redistribution_plan(self, channel_metrics: Dict[str, Dict[str, float]]) -> Dict[str, float]:
         """
-        Genera un plan de redistribución de tráfico entre canales
+        Genera un plan de redistribución de tráfico
         
         Args:
-            channel_metrics: Métricas por canal (CTR, ROI, etc.)
+            channel_metrics: Métricas por canal
             
         Returns:
-            Diccionario con los factores de redistribución por canal
+            Factores de redistribución por canal
         """
-        # Identificar canales con bajo CTR
-        low_ctr_channels = {}
-        for channel, metrics in channel_metrics.items():
-            ctr = metrics.get('ctr', 0)
-            if ctr < self.ctr_threshold:
-                low_ctr_channels[channel] = ctr
+        low_ctr_channels = {
+            channel: metrics.get('ctr', 0)
+            for channel, metrics in channel_metrics.items()
+            if metrics.get('ctr', 0) < self.ctr_threshold
+        }
         
-        # Identificar canales con alto ROI
-        high_roi_channels = {}
-        for channel, metrics in channel_metrics.items():
-            roi = metrics.get('roi', 0)
-            if roi > self.roi_threshold:
-                high_roi_channels[channel] = roi
+        high_roi_channels = {
+            channel: metrics.get('roi', 0)
+            for channel, metrics in channel_metrics.items()
+            if metrics.get('roi', 0) > self.roi_threshold
+        }
         
-        # Calcular factores de redistribución
-        redistribution_plan = {}
-        
-        # Inicializar todos los canales con factor 1.0 (sin cambios)
-        for channel in channel_metrics:
-            redistribution_plan[channel] = 1.0
-        
-        # Reducir inversión en canales de bajo CTR
+        redistribution_plan = {channel: 1.0 for channel in channel_metrics}
         total_reduction = 0.0
+        
         for channel, ctr in low_ctr_channels.items():
-            # Reducir proporcionalmente a la diferencia con el umbral
             reduction_factor = 1.0 - (self.ctr_threshold - ctr) / self.ctr_threshold
-            reduction_factor = max(0.2, reduction_factor)  # No reducir más del 80%
-            
+            reduction_factor = max(0.2, reduction_factor)
             redistribution_plan[channel] = reduction_factor
             total_reduction += (1.0 - reduction_factor)
         
-        # Aumentar inversión en canales de alto ROI
         if high_roi_channels and total_reduction > 0:
-            # Normalizar ROIs para distribución
             total_roi = sum(high_roi_channels.values())
             for channel, roi in high_roi_channels.items():
-                # Aumentar proporcionalmente al ROI
                 increase_factor = 1.0 + (total_reduction * roi / total_roi)
                 redistribution_plan[channel] = increase_factor
         
-        logger.info(f"Plan de redistribución generado: {redistribution_plan}")
+        logger.info(
+            f"Plan de redistribución generado: {redistribution_plan}",
+            extra={'context': 'traffic_redistribution_plan'}
+        )
         return redistribution_plan
     
     def make_content_decision(self, context: Dict[str, Any]) -> Dict[str, Any]:
@@ -598,136 +700,171 @@ class DecisionEngine:
         Toma una decisión completa sobre la estrategia de contenido
         
         Args:
-            context: Información contextual completa
+            context: Información contextual
             
         Returns:
-            Decisión completa con estrategias de CTA, visuales y voz
+            Decisión completa con estrategias
         """
-        # Seleccionar estrategias individuales
-        cta_strategy = self.select_cta_strategy(context)
-        visual_strategy = self.select_visual_strategy(context)
-        voice_strategy = self.select_voice_strategy(context)
-        
-        # Combinar en una decisión completa
-        decision = {
-            'cta': cta_strategy,
-            'visual': visual_strategy,
-            'voice': voice_strategy,
-            'timestamp': datetime.datetime.now().isoformat(),
-            'context': context
-        }
-        
-        # Registrar decisión
-        logger.info(f"Decisión de contenido generada para {context.get('niche')} en {context.get('platform')}")
-        
-        return decision
+        try:
+            self._validate_context(context)
+            cta_strategy = self.select_cta_strategy(context)
+            visual_strategy = self.select_visual_strategy(context)
+            voice_strategy = self.select_voice_strategy(context)
+            
+            decision = {
+                'cta': cta_strategy,
+                'visual': visual_strategy,
+                'voice': voice_strategy,
+                'timestamp': datetime.datetime.now().isoformat(),
+                'context': context,
+                'decision_id': f"decision_{context.get('niche', 'general')}_{int(time.time())}"
+            }
+            
+            self.kb.save_to_mongodb('decisions', decision)
+            logger.info(
+                f"Decisión de contenido generada para {context.get('niche')} en {context.get('platform')}",
+                extra={'context': f'decision_{decision['decision_id']}'}
+            )
+            
+            return decision
+        except Exception as e:
+            logger.error(
+                f"Error al generar decisión de contenido: {str(e)}",
+                extra={'context': 'content_decision'}
+            )
+            raise DecisionEngineError(f"Error al generar decisión: {str(e)}")
     
     def optimize_strategy_in_real_time(self, content_id: str, metrics: Dict[str, float]) -> Dict[str, Any]:
         """
-        Optimiza la estrategia en tiempo real basada en métricas actuales
+        Optimiza la estrategia en tiempo real
         
         Args:
             content_id: Identificador del contenido
-            metrics: Métricas actuales (CTR, conversión, etc.)
+            metrics: Métricas actuales
             
         Returns:
-            Ajustes recomendados a la estrategia
+            Ajustes recomendados
         """
-        # Obtener decisión original
-        original_decision = self.kb.get_content_decision(content_id)
-        if not original_decision:
-            logger.warning(f"No se encontró decisión original para contenido {content_id}")
+        try:
+            decision = self.kb.get_from_mongodb('decisions', {'decision_id': content_id})
+            if not decision:
+                logger.warning(
+                    f"No se encontró decisión para contenido {content_id}",
+                    extra={'context': 'realtime_optimization'}
+                )
+                return {}
+            
+            adjustments = {}
+            ctr = metrics.get('ctr', 0)
+            conversion_rate = metrics.get('conversion_rate', 0)
+            
+            if conversion_rate < 0.05:
+                cta_strategy = decision.get('cta', {})
+                current_timing = cta_strategy.get('timing')
+                if current_timing == 'early':
+                    adjustments['cta_timing'] = 'middle'
+                elif current_timing == 'late':
+                    adjustments['cta_timing'] = 'middle'
+                
+                current_type = cta_strategy.get('type')
+                if current_type == 'question':
+                    adjustments['cta_type'] = 'challenge'
+                elif current_type == 'offer':
+                    adjustments['cta_type'] = 'curiosity'
+            
+            if ctr < 0.03:
+                visual_strategy = decision.get('visual', {})
+                current_style = visual_strategy.get('style')
+                if current_style == 'minimalist':
+                    adjustments['visual_style'] = 'vibrant'
+                elif current_style == 'professional':
+                    adjustments['visual_style'] = 'dramatic'
+                
+                current_color = visual_strategy.get('color_scheme')
+                if current_color == 'neutral':
+                    adjustments['visual_color'] = 'high_contrast'
+                elif current_color == 'cool':
+                    adjustments['visual_color'] = 'warm'
+            
+            if adjustments:
+                logger.info(
+                    f"Ajustes en tiempo real generados para contenido {content_id}: {adjustments}",
+                    extra={'context': 'realtime_optimization'}
+                )
+            
+            return adjustments
+        except Exception as e:
+            logger.error(
+                f"Error en optimización en tiempo real: {str(e)}",
+                extra={'context': 'realtime_optimization'}
+            )
             return {}
-        
-        # Verificar si es necesario ajustar
-        ctr = metrics.get('ctr', 0)
-        conversion_rate = metrics.get('conversion_rate', 0)
-        
-        adjustments = {}
-        
-        # Ajustar CTA si la conversión es baja
-        if conversion_rate < 0.05:  # Umbral de 5%
-            cta_strategy = original_decision.get('cta', {})
-            current_timing = cta_strategy.get('timing')
-            
-            # Sugerir cambio de timing
-            if current_timing == 'early':
-                adjustments['cta_timing'] = 'middle'
-            elif current_timing == 'late':
-                adjustments['cta_timing'] = 'middle'
-            
-            # Sugerir cambio de tipo
-            current_type = cta_strategy.get('type')
-            if current_type == 'question':
-                adjustments['cta_type'] = 'challenge'
-            elif current_type == 'offer':
-                adjustments['cta_type'] = 'curiosity'
-        
-        # Ajustar visuales si el CTR es bajo
-        if ctr < 0.03:  # Umbral de 3%
-            visual_strategy = original_decision.get('visual', {})
-            current_style = visual_strategy.get('style')
-            
-            # Sugerir cambio de estilo visual
-            if current_style == 'minimalist':
-                adjustments['visual_style'] = 'vibrant'
-            elif current_style == 'professional':
-                adjustments['visual_style'] = 'dramatic'
-            
-            # Sugerir cambio de esquema de color
-            current_color = visual_strategy.get('color_scheme')
-            if current_color == 'neutral':
-                adjustments['visual_color'] = 'high_contrast'
-            elif current_color == 'cool':
-                adjustments['visual_color'] = 'warm'
-        
-        # Registrar ajustes
-        if adjustments:
-            logger.info(f"Ajustes en tiempo real generados para contenido {content_id}: {adjustments}")
-        
-        return adjustments
-
-# Función para obtener la instancia del motor de decisiones
-def get_decision_engine():
-    return DecisionEngine()
-
-# Si se ejecuta como script principal, realizar pruebas
-if __name__ == "__main__":
-    # Crear directorio de logs si no existe
-    os.makedirs('logs', exist_ok=True)
     
-    # Probar el motor de decisiones
+    def evaluate_bandit_performance(self, bandit_type: str, bandit_key: str) -> Dict[str, Any]:
+        """
+        Evalúa el rendimiento de un bandit específico
+        
+        Args:
+            bandit_type: Tipo de bandit (cta, visual, voice)
+            bandit_key: Clave del bandit
+            
+        Returns:
+            Informe de rendimiento
+        """
+        bandit_dict = getattr(self, f"{bandit_type}_bandits")
+        if bandit_key not in bandit_dict:
+            return {'status': 'not_found'}
+        
+        bandit = bandit_dict[bandit_key]
+        report = {
+            'bandit_key': bandit_key,
+            'actions': {},
+            'timestamp': datetime.datetime.now().isoformat()
+        }
+        
+        for action in bandit.A:
+            context = np.ones(self.feature_dim)
+            A_inv = np.linalg.inv(bandit.A[action])
+            mean = context @ bandit.theta[action]
+            variance = np.sqrt(context.T @ A_inv @ context)
+            report['actions'][action] = {
+                'estimated_reward': float(mean),
+                'confidence': 1.0 - min(float(variance), 1.0),
+                'samples': int(np.sum(bandit.A[action].diagonal()))
+            }
+        
+        return report
+
+if __name__ == "__main__":
+    os.makedirs('logs', exist_ok=True)
     engine = DecisionEngine()
     
-    # Contexto de ejemplo
     test_context = {
         'niche': 'finance',
         'platform': 'youtube',
         'character': 'finance_expert',
         'audience': {
-                        'age_group': 3,  # 25-34
+            'age_group': 3,
             'engagement_level': 7,
             'retention_rate': 65
-        }
+        },
+        'trend_score': 0.8
     }
     
-    # Probar selección de estrategias
     print("\nPrueba de selección de estrategias:")
     cta_strategy = engine.select_cta_strategy(test_context)
-    print(f"Estrategia CTA seleccionada: {cta_strategy}")
+    print(f"Estrategia CTA: {cta_strategy}")
     
     visual_strategy = engine.select_visual_strategy(test_context)
-    print(f"Estrategia visual seleccionada: {visual_strategy}")
+    print(f"Estrategia visual: {visual_strategy}")
     
     voice_strategy = engine.select_voice_strategy(test_context)
-    print(f"Estrategia de voz seleccionada: {voice_strategy}")
+    print(f"Estrategia de voz: {voice_strategy}")
     
-    # Probar decisión completa
     print("\nPrueba de decisión completa:")
     decision = engine.make_content_decision(test_context)
     print(f"Decisión completa: {json.dumps(decision, indent=2)}")
     
-    # Probar actualización de estrategias
     print("\nPrueba de actualización de estrategias:")
     test_metrics = {
         'ctr': 0.08,
@@ -736,45 +873,32 @@ if __name__ == "__main__":
         'retention_rate': 0.70
     }
     
-    engine.update_cta_strategy(cta_strategy['bandit_key'], cta_strategy['action'], test_metrics)
-    engine.update_visual_strategy(visual_strategy['bandit_key'], visual_strategy['action'], test_metrics)
-    engine.update_voice_strategy(voice_strategy['bandit_key'], voice_strategy['action'], test_metrics)
+    engine.update_cta_strategy(cta_strategy['bandit_key'], cta_strategy['action'], test_metrics, test_context)
+    engine.update_visual_strategy(visual_strategy['bandit_key'], visual_strategy['action'], test_metrics, test_context)
+    engine.update_voice_strategy(voice_strategy['bandit_key'], voice_strategy['action'], test_metrics, test_context)
     
-    # Probar redistribución de tráfico
     print("\nPrueba de redistribución de tráfico:")
     test_channel_metrics = {
-        'youtube_finance': {
-            'ctr': 0.02,
-            'roi': 30
-        },
-        'tiktok_finance': {
-            'ctr': 0.08,
-            'roi': 120
-        },
-        'instagram_finance': {
-            'ctr': 0.04,
-            'roi': 60
-        }
+        'youtube_finance': {'ctr': 0.02, 'roi': 30},
+        'tiktok_finance': {'ctr': 0.08, 'roi': 120},
+        'instagram_finance': {'ctr': 0.04, 'roi': 60}
     }
     
     should_redistribute = engine.should_redistribute_traffic(test_channel_metrics)
-    print(f"¿Debe redistribuir tráfico? {should_redistribute}")
+    print(f"¿Redistribuir tráfico? {should_redistribute}")
     
     if should_redistribute:
         redistribution_plan = engine.get_traffic_redistribution_plan(test_channel_metrics)
         print(f"Plan de redistribución: {redistribution_plan}")
     
-    # Probar optimización en tiempo real
     print("\nPrueba de optimización en tiempo real:")
-    # Simular que la base de conocimiento tiene la decisión original
-    engine.kb.save_content_decision("test_content_123", decision)
-    
-    test_realtime_metrics = {
-        'ctr': 0.02,
-        'conversion_rate': 0.03
-    }
-    
-    adjustments = engine.optimize_strategy_in_real_time("test_content_123", test_realtime_metrics)
+    engine.kb.save_to_mongodb('decisions', decision)
+    test_realtime_metrics = {'ctr': 0.02, 'conversion_rate': 0.03}
+    adjustments = engine.optimize_strategy_in_real_time(decision['decision_id'], test_realtime_metrics)
     print(f"Ajustes recomendados: {adjustments}")
+    
+    print("\nPrueba de evaluación de bandit:")
+    report = engine.evaluate_bandit_performance('cta', cta_strategy['bandit_key'])
+    print(f"Informe de rendimiento: {json.dumps(report, indent=2)}")
     
     print("\nPruebas completadas con éxito")
