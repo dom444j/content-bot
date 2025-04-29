@@ -34,6 +34,10 @@ import requests
 from typing import Dict, List, Any, Optional, Tuple
 from collections import defaultdict
 from logging.handlers import RotatingFileHandler
+import functools
+import jsonschema
+from backoff import on_exception, expo
+from requests.exceptions import RequestException, ConnectionError, Timeout
 
 # Configurar logger de actividad separado
 os.makedirs('logs/activity', exist_ok=True)
@@ -60,6 +64,38 @@ logging.basicConfig(
 )
 
 logger = logging.getLogger('Orchestrator')
+
+def retry_with_backoff(max_tries=5, backoff_factor=2, exceptions=(Exception,)):
+    """
+    Decorador para reintentar funciones con backoff exponencial
+    
+    Args:
+        max_tries: Número máximo de intentos
+        backoff_factor: Factor para el cálculo de tiempo de espera exponencial
+        exceptions: Tupla de excepciones que activarán el reintento
+    """
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            attempt = 0
+            while attempt < max_tries:
+                try:
+                    return func(*args, **kwargs)
+                except exceptions as e:
+                    attempt += 1
+                    if attempt == max_tries:
+                        logger.error(f"Función {func.__name__} falló después de {max_tries} intentos: {str(e)}")
+                        raise
+                    
+                    wait_time = backoff_factor ** attempt
+                    jitter = random.uniform(0, 0.1 * wait_time)
+                    wait_time += jitter
+                    
+                    logger.warning(f"Reintento {attempt}/{max_tries} para {func.__name__} tras error: {str(e)}. Esperando {wait_time:.2f}s")
+                    time.sleep(wait_time)
+            return None
+        return wrapper
+    return decorator
 
 class Priority:
     """Clase para definir niveles de prioridad de tareas"""
@@ -157,27 +193,146 @@ class Orchestrator:
         logger.info("Orchestrator inicializado correctamente")
     
     def _load_config(self) -> Dict:
-        """Carga la configuración del sistema desde archivos JSON"""
-        config = {}
-        config_dir = os.path.join('config')
-        
+        """Carga y valida la configuración del sistema"""
         try:
-            with open(os.path.join(config_dir, 'platforms.json'), 'r', encoding='utf-8') as f:
-                config['platforms'] = json.load(f)
-            with open(os.path.join(config_dir, 'strategy.json'), 'r', encoding='utf-8') as f:
-                config['strategy'] = json.load(f)
-            with open(os.path.join(config_dir, 'niches.json'), 'r', encoding='utf-8') as f:
-                config['niches'] = json.load(f)
-            with open(os.path.join(config_dir, 'character_profiles.json'), 'r', encoding='utf-8') as f:
-                config['characters'] = json.load(f)
+            config_path = os.path.join('config', 'system_config.json')
+            if not os.path.exists(config_path):
+                logger.error(f"Archivo de configuración no encontrado: {config_path}")
+                raise FileNotFoundError(f"Archivo de configuración no encontrado: {config_path}")
                 
-            logger.info("Configuración cargada correctamente")
-            return config
+            with open(config_path, 'r', encoding='utf-8') as f:
+                config = json.load(f)
             
-        except FileNotFoundError as e:
+            # Esquema de validación para la configuración
+            config_schema = {
+                "type": "object",
+                "required": ["system", "platforms", "monetization", "creation"],
+                "properties": {
+                    "system": {
+                        "type": "object",
+                        "required": ["max_retries", "retry_delay_base", "task_check_interval"],
+                        "properties": {
+                            "max_retries": {"type": "integer", "minimum": 1},
+                            "retry_delay_base": {"type": "number", "minimum": 0.1},
+                            "task_check_interval": {"type": "number", "minimum": 0.1}
+                        }
+                    },
+                    "platforms": {
+                        "type": "object",
+                        "minProperties": 1,
+                        "additionalProperties": {
+                            "type": "object",
+                            "required": ["enabled"],
+                            "properties": {
+                                "enabled": {"type": "boolean"},
+                                "api_key": {"type": "string"},
+                                "client_id": {"type": "string"},
+                                "client_secret": {"type": "string"}
+                            }
+                        }
+                    },
+                    "monetization": {
+                        "type": "object",
+                        "required": ["strategies"],
+                        "properties": {
+                            "strategies": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {"type": "string"}
+                            }
+                        }
+                    },
+                    "creation": {
+                        "type": "object",
+                        "required": ["content_types"],
+                        "properties": {
+                            "content_types": {
+                                "type": "array",
+                                "minItems": 1,
+                                "items": {"type": "string"}
+                            }
+                        }
+                    }
+                }
+            }
+            
+            try:
+                jsonschema.validate(instance=config, schema=config_schema)
+                logger.info("Configuración validada correctamente")
+            except jsonschema.exceptions.ValidationError as e:
+                logger.error(f"Error de validación en configuración: {str(e)}")
+                # Cargar configuración por defecto si la validación falla
+                config = self._load_default_config()
+                logger.warning("Se ha cargado la configuración por defecto")
+            
+            # Validaciones adicionales específicas
+            self._validate_platform_configs(config)
+            
+            # Cargar configuraciones adicionales
+            config_dir = os.path.join('config')
+            try:
+                with open(os.path.join(config_dir, 'platforms.json'), 'r', encoding='utf-8') as f:
+                    config['platforms'] = json.load(f)
+                with open(os.path.join(config_dir, 'strategy.json'), 'r', encoding='utf-8') as f:
+                    config['strategy'] = json.load(f)
+                with open(os.path.join(config_dir, 'niches.json'), 'r', encoding='utf-8') as f:
+                    config['niches'] = json.load(f)
+                with open(os.path.join(config_dir, 'character_profiles.json'), 'r', encoding='utf-8') as f:
+                    config['characters'] = json.load(f)
+                    
+                logger.info("Configuraciones adicionales cargadas correctamente")
+            except FileNotFoundError as e:
+                logger.error(f"Error al cargar configuraciones adicionales: {str(e)}")
+                self._create_default_config()
+                return self._load_config()
+            
+            return config
+        except json.JSONDecodeError as e:
+            logger.error(f"Error al decodificar JSON de configuración: {str(e)}")
+            return self._load_default_config()
+        except Exception as e:
             logger.error(f"Error al cargar configuración: {str(e)}")
-            self._create_default_config()
-            return self._load_config()
+            return self._load_default_config()
+    
+    def _load_default_config(self) -> Dict:
+        """Carga una configuración por defecto en caso de error"""
+        logger.warning("Cargando configuración por defecto")
+        return {
+            "system": {
+                "max_retries": 3,
+                "retry_delay_base": 2,
+                "task_check_interval": 5
+            },
+            "platforms": {
+                "youtube": {"enabled": False},
+                "tiktok": {"enabled": False},
+                "instagram": {"enabled": False}
+            },
+            "monetization": {
+                "strategies": ["ads", "affiliate"]
+            },
+            "creation": {
+                "content_types": ["video", "short"]
+            }
+        }
+    
+    def _validate_platform_configs(self, config: Dict) -> None:
+        """Realiza validaciones específicas para configuraciones de plataformas"""
+        for platform, platform_config in config.get("platforms", {}).items():
+            if platform_config.get("enabled", False):
+                # Verificar credenciales necesarias según el tipo de plataforma
+                if platform in self.oauth_platforms:
+                    required_fields = ["client_id", "client_secret", "redirect_uri"]
+                    missing_fields = [field for field in required_fields if field not in platform_config]
+                    if missing_fields:
+_Plataforma {platform} habilitada pero faltan campos: {', '.join(missing_fields)}")
+                        config["platforms"][platform]["enabled"] = False
+                        logger.warning(f"Plataforma {platform} deshabilitada automáticamente")
+                else:
+                    if "api_key" not in platform_config:
+                        logger.warning(f"Plataforma {platform} habilitada pero falta api_key")
+                        config["platforms"][platform]["enabled"] = False
+                        logger.warning(f"Plataforma {platform} deshabilitada automáticamente")
     
     def _create_default_config(self):
         """Crea archivos de configuración por defecto si no existen"""
@@ -378,7 +533,7 @@ class Orchestrator:
                 return False
             
             # Actualizar configuración con nuevos tokens
-            new_credentials = {
+            new credentials = {
                 'access_token': token_response['access_token'],
                 'refresh_token': token_response['refresh_token'],
                 'token_expiry': (datetime.datetime.now() + datetime.timedelta(seconds=token_response['expires_in'])).isoformat()
@@ -529,6 +684,9 @@ class Orchestrator:
                 if module == 'competitor_analyzer':
                     from analysis.competitor_analyzer import CompetitorAnalyzer
                     self.subsystems[subsystem][module] = CompetitorAnalyzer()
+                elif module == 'trend_detector':
+                    from analysis.trend_detector import TrendDetector
+                    self.subsystems[subsystem][module] = TrendDetector()
             
             logger.info(f"Módulo {module} del subsistema {subsystem} cargado correctamente")
             return self.subsystems[subsystem][module]
@@ -845,6 +1003,243 @@ class Orchestrator:
         except Exception as e:
             logger.error(f"Error al iniciar optimización: {str(e)}")
             return {'success': False, 'error': str(e)}
+    
+    @retry_with_backoff(max_tries=3, exceptions=(ConnectionError, Timeout, RequestException))
+    def _fetch_platform_data(self, platform: str, endpoint: str, params: Dict = None) -> Dict:
+        """Obtiene datos de una plataforma con reintentos automáticos"""
+        if platform not in self.config.get("platforms", {}):
+            raise ValueError(f"Plataforma no configurada: {platform}")
+            
+        platform_config = self.config["platforms"][platform]
+        if not platform_config.get("enabled", False):
+            raise ValueError(f"Plataforma deshabilitada: {platform}")
+            
+        # Aquí iría la lógica para hacer la solicitud a la API de la plataforma
+        # Por ejemplo:
+        # response = requests.get(endpoint, params=params, headers={"Authorization": f"Bearer {platform_config['token']}"})
+        # response.raise_for_status()
+        # return response.json()
+        
+        # Para este ejemplo, simplemente devolvemos un diccionario vacío
+        logger.info(f"Simulando obtención de datos de {platform} en {endpoint}")
+        return {}
+    
+    def run_pipeline(self) -> None:
+        """Ejecuta el pipeline completo de procesamiento con manejo de errores mejorado"""
+        try:
+            logger.info("Iniciando pipeline de procesamiento")
+            activity_logger.info("Pipeline de procesamiento iniciado")
+            
+            # 1. Verificar configuración
+            if not self._validate_system_state():
+                logger.error("Estado del sistema inválido, abortando pipeline")
+                return
+            
+            # 2. Detectar tendencias con reintentos
+            try:
+                trends = self._detect_trends_with_retries()
+                logger.info(f"Tendencias detectadas: {len(trends)}")
+            except Exception as e:
+                logger.error(f"Error crítico en detección de tendencias: {str(e)}")
+                trends = []
+            
+            # 3. Crear tareas de contenido basadas en tendencias
+            for trend in trends:
+                try:
+                    self._create_content_task_from_trend(trend)
+                except Exception as e:
+                    logger.error(f"Error al crear tarea para tendencia {trend.get('id', 'unknown')}: {str(e)}")
+                    continue
+            
+            # 4. Verificar shadowbans en canales activos
+            self._check_shadowbans_with_retries()
+            
+            # 5. Optimizar canales según programación
+            self._optimize_channels_with_retries()
+            
+            # 6. Actualizar métricas del sistema
+            self._update_system_metrics()
+            
+            logger.info("Pipeline de procesamiento completado")
+            activity_logger.info("Pipeline de procesamiento completado exitosamente")
+            
+        except Exception as e:
+            logger.error(f"Error crítico en pipeline: {str(e)}")
+            activity_logger.error(f"Pipeline interrumpido por error: {str(e)}")
+            # Notificar error crítico
+            notifier = self._load_component('notifier')
+            if notifier:
+                notifier.send_notification(
+                    title="Error crítico en pipeline de procesamiento",
+                    message=f"El sistema ha encontrado un error crítico: {str(e)}",
+                    level="critical"
+                )
+    
+    @retry_with_backoff(max_tries=5, backoff_factor=2)
+    def _detect_trends_with_retries(self) -> List[Dict]:
+        """Detecta tendencias con reintentos automáticos"""
+        trend_detector = self._load_subsystem('analysis', 'trend_detector')
+        if not trend_detector:
+            logger.warning("Detector de tendencias no disponible")
+            return []
+            
+        return trend_detector.detect_trends()
+    
+    def _check_shadowbans_with_retries(self) -> None:
+        """Verifica shadowbans en todos los canales con reintentos"""
+        for channel_id, channel in self.channels.items():
+            for platform in channel.get('platforms', []):
+                try:
+                    self._check_channel_shadowban(channel_id, platform)
+                except Exception as e:
+                    logger.error(f"Error al verificar shadowban para canal {channel_id} en {platform}: {str(e)}")
+    
+    @retry_with_backoff(max_tries=3)
+    def _check_channel_shadowban(self, channel_id: str, platform: str) -> None:
+        """Verifica si un canal está en shadowban en una plataforma específica"""
+        shadowban_detector = self._load_component('shadowban_detector')
+        if not shadowban_detector:
+            logger.warning("Detector de shadowban no disponible")
+            return
+            
+        result = shadowban_detector.check_shadowban(channel_id, platform)
+        if result.get('is_shadowbanned', False):
+            logger.warning(f"Shadowban detectado para canal {channel_id} en {platform}")
+            self._handle_shadowban(channel_id, platform, result)
+    
+    def _optimize_channels_with_retries(self) -> None:
+        """Optimiza canales según programación con reintentos"""
+        for channel_id, channel in self.channels.items():
+            # Verificar si es momento de optimizar este canal
+            if not self._should_optimize_channel(channel_id):
+                continue
+                
+            try:
+                self._create_optimization_task(channel_id)
+                logger.info(f"Tarea de optimización creada para canal {channel_id}")
+            except Exception as e:
+                logger.error(f"Error al crear tarea de optimización para canal {channel_id}: {str(e)}")
+    
+    def _validate_system_state(self) -> bool:
+        """Valida el estado general del sistema antes de ejecutar el pipeline"""
+        # Verificar componentes críticos
+        critical_components = ['decision_engine', 'scheduler', 'knowledge_base']
+        for component in critical_components:
+            if not self._load_component(component):
+                logger.error(f"Componente crítico no disponible: {component}")
+                return False
+        
+        # Verificar conexión a base de datos
+        try:
+            self._test_database_connection()
+        except Exception as e:
+            logger.error(f"Error de conexión a base de datos: {str(e)}")
+            return False
+        
+        # Verificar espacio de almacenamiento
+        if not self._check_storage_space():
+            logger.error("Espacio de almacenamiento insuficiente")
+            return False
+        
+        return True
+    
+    def _test_database_connection(self) -> bool:
+        """Prueba la conexión a la base de datos"""
+        # Implementación depende del tipo de base de datos
+        # Este es un ejemplo simplificado
+        try:
+            # Aquí iría el código para probar la conexión
+            return True
+        except Exception as e:
+            logger.error(f"Error al conectar con la base de datos: {str(e)}")
+            raise
+    
+    def _check_storage_space(self) -> bool:
+        """Verifica que haya suficiente espacio de almacenamiento"""
+        # Implementación depende del sistema de almacenamiento
+        # Este es un ejemplo simplificado para verificar espacio en disco local
+        try:
+            storage_path = os.path.join('data', 'content')
+            if not os.path.exists(storage_path):
+                os.makedirs(storage_path, exist_ok=True)
+            
+            # En un sistema real, aquí verificaríamos el espacio disponible
+            # Por ejemplo, usando shutil.disk_usage() para almacenamiento local
+            # O consultando la API de S3 para almacenamiento en la nube
+            
+            # Para este ejemplo, simplemente devolvemos True
+            return True
+        except Exception as e:
+            logger.error(f"Error al verificar espacio de almacenamiento: {str(e)}")
+            return False
+    
+    def _create_content_task_from_trend(self, trend: Dict) -> str:
+        """Crea una tarea de creación de contenido basada en una tendencia detectada"""
+        # Determinar el canal más adecuado para esta tendencia
+        channel_id = self._select_best_channel_for_trend(trend)
+        if not channel_id:
+            logger.warning(f"No se encontró canal adecuado para tendencia: {trend.get('keyword', 'unknown')}")
+            return None
+        
+        # Crear la tarea
+        task_id = self.create_content(
+            channel_id=channel_id,
+            content_type="video",  # O determinar dinámicamente según la tendencia
+            topic=trend.get('keyword')
+        )['task_id']
+        
+        logger.info(f"Tarea de contenido creada para tendencia '{trend.get('keyword', 'unknown')}': {task_id}")
+        return task_id
+    
+    def _select_best_channel_for_trend(self, trend: Dict) -> Optional[str]:
+        """Selecciona el canal más adecuado para una tendencia específica"""
+        best_channel = None
+        best_score = -1
+        
+        for channel_id, channel in self.channels.items():
+            # Verificar si el canal está activo
+            if self.channel_status.get(channel_id, ChannelStatus.ACTIVE) != ChannelStatus.ACTIVE:
+                continue
+            
+            # Calcular puntuación de compatibilidad
+            score = self._calculate_trend_channel_compatibility(trend, channel)
+            
+            if score > best_score:
+                best_score = score
+                best_channel = channel_id
+        
+        return best_channel
+    
+    def _calculate_trend_channel_compatibility(self, trend: Dict, channel: Dict) -> float:
+        """Calcula la compatibilidad entre una tendencia y un canal"""
+        # Este es un ejemplo simplificado
+        # En un sistema real, usaríamos algoritmos más sofisticados
+        
+        score = 0.0
+        
+        # Compatibilidad de nicho
+        if trend.get('category') == channel.get('niche'):
+            score += 50.0
+        
+        # Compatibilidad de audiencia
+        audience_overlap = self._calculate_audience_overlap(trend, channel)
+        score += audience_overlap * 30.0
+        
+        # Potencial de monetización
+        monetization_potential = self._estimate_monetization_potential(trend, channel)
+        score += monetization_potential * 20.0
+        
+        return score
+    
+    def _calculate_audience_overlap(self, trend: Dict, channel: Dict) -> float:
+        """Calcula el solapamiento entre la audiencia de la tendencia y el canal"""
+        # Implementación simplificada
+        return random.uniform(0.1, 1.0)  # En un sistema real, esto sería calculado con datos reales
+    
+    def _estimate_monetization_potential(self, trend: Dict, channel: Dict) -> float:
+        """Estima el potencial de monetización de una tendencia para un canal"""
+        # Implementación simplificada
+        return random.uniform(0.1, 1.0)  # En un sistema real, esto sería calculado con datos reales
     
     def _check_shadowban(self, channel_id: str) -> bool:
         """
@@ -1405,7 +1800,7 @@ class Orchestrator:
                             task['steps']['monetization']['status'] = 'completed'
                             break
                     except Exception as e:
-                        task['steps']['monetization']['retries'] = attempt + 1
+                                                task['steps']['monetization']['retries'] = attempt + 1
                         if attempt < self.max_retries:
                             delay = self._calculate_retry_delay(attempt)
                             logger.warning(f"Reintento {attempt + 1}/{self.max_retries} para monetization: {str(e)}, esperando {delay}s")
@@ -1416,50 +1811,33 @@ class Orchestrator:
                             raise
                 self._persist_task(task)
             
-            self.channels[channel_id]['stats']['videos'] += 1
-            
+            # Marcar tarea como completada
             task['status'] = 'completed'
             task['completed_at'] = datetime.datetime.now().isoformat()
             self._persist_task(task)
+            self.task_history.append(task)
+            del self.current_tasks[task_id]
             
-            notifier = self._load_component('notifier')
-            if notifier:
-                notifier.send_notification(
-                    title=f"Contenido creado para {channel['name']}",
-                    message=f"Se ha creado y publicado nuevo contenido: {task['steps']['script_creation']['result'].get('title', 'Nuevo video')}",
-                    level="info"
-                )
-            
-            knowledge_base = self._load_component('knowledge_base')
-            if knowledge_base:
-                knowledge_base.save_content(task)
-            
-            logger.info(f"Tarea completada: {task_id}")
+            logger.info(f"Tarea de creación de contenido completada: {task_id}")
+            activity_logger.info(f"Tarea de contenido {task_id} completada para canal {channel_id}")
             
         except Exception as e:
-            logger.error(f"Error en proceso de creación de contenido: {str(e)}")
             task['status'] = 'failed'
             task['error'] = str(e)
-            task['failed_at'] = datetime.datetime.now().isoformat()
             self._persist_task(task)
+            logger.error(f"Error en tarea de creación de contenido {task_id}: {str(e)}")
+            activity_logger.error(f"Fallo en tarea {task_id} para canal {channel_id}: {str(e)}")
             
             notifier = self._load_component('notifier')
             if notifier:
                 notifier.send_notification(
-                    title=f"Error en creación de contenido para {self.channels[task['channel_id']]['name']}",
-                    message=f"Error: {str(e)}",
+                    title=f"Error en creación de contenido para {channel['name']}",
+                    message=f"Fallo en tarea {task_id}: {str(e)}",
                     level="error"
                 )
-        
-        finally:
-            self.task_history.append(task)
-            if task_id in self.current_tasks:
-                del self.current_tasks[task_id]
-            if task_id in self.paused_tasks:
-                del self.paused_tasks[task_id]
-    
+
     def _process_optimization(self, task_id: str):
-        """Procesa una tarea de optimización de canal con reintentos"""
+        """Procesa una tarea de optimización de canal"""
         task = self.current_tasks.get(task_id)
         if not task:
             return
@@ -1470,16 +1848,16 @@ class Orchestrator:
         channel = self.channels[channel_id]
         
         try:
+            # Análisis de rendimiento
             if task['steps']['performance_analysis']['status'] == 'pending':
                 task['steps']['performance_analysis']['status'] = 'processing'
                 self._persist_task(task)
-                performance = None
                 for attempt in range(self.max_retries + 1):
                     try:
                         analytics_engine = self._load_component('analytics_engine')
                         if analytics_engine:
-                            performance = analytics_engine.analyze_channel_performance(channel_id)
-                            task['steps']['performance_analysis']['result'] = performance
+                            performance_data = analytics_engine.analyze_performance(channel_id)
+                            task['steps']['performance_analysis']['result'] = performance_data
                             task['steps']['performance_analysis']['status'] = 'completed'
                             break
                         else:
@@ -1496,25 +1874,23 @@ class Orchestrator:
                             raise
                 self._persist_task(task)
             
+            # Análisis de competidores
             if task['steps']['competitor_analysis']['status'] == 'pending':
                 task['steps']['competitor_analysis']['status'] = 'processing'
                 self._persist_task(task)
-                competitors = None
                 for attempt in range(self.max_retries + 1):
                     try:
                         competitor_analyzer = self._load_subsystem('analysis', 'competitor_analyzer')
                         if competitor_analyzer:
-                            competitors = competitor_analyzer.analyze_competitors(
+                            competitor_data = competitor_analyzer.analyze_competitors(
                                 niche=channel['niche'],
-                                performance=task['steps']['performance_analysis']['result']
+                                platforms=channel['platforms']
                             )
-                            task['steps']['competitor_analysis']['result'] = competitors
+                            task['steps']['competitor_analysis']['result'] = competitor_data
                             task['steps']['competitor_analysis']['status'] = 'completed'
                             break
                         else:
-                            task['steps']['competitor_analysis']['result'] = {'analyzed': False, 'reason': 'Module not available'}
-                            task['steps']['competitor_analysis']['status'] = 'completed'
-                            break
+                            raise Exception("Competitor analyzer not available")
                     except Exception as e:
                         task['steps']['competitor_analysis']['retries'] = attempt + 1
                         if attempt < self.max_retries:
@@ -1527,20 +1903,20 @@ class Orchestrator:
                             raise
                 self._persist_task(task)
             
+            # Actualización de estrategia de contenido
             if task['steps']['content_strategy_update']['status'] == 'pending':
                 task['steps']['content_strategy_update']['status'] = 'processing'
                 self._persist_task(task)
-                strategy_update = None
                 for attempt in range(self.max_retries + 1):
                     try:
                         decision_engine = self._load_component('decision_engine')
                         if decision_engine:
-                            strategy_update = decision_engine.update_content_strategy(
-                                channel_id=channel_id,
-                                performance=task['steps']['performance_analysis']['result'],
-                                competitors=task['steps']['competitor_analysis']['result'] if 'result' in task['steps']['competitor_analysis'] else None
+                            new_strategy = decision_engine.update_content_strategy(
+                                performance_data=task['steps']['performance_analysis']['result'],
+                                competitor_data=task['steps']['competitor_analysis']['result'],
+                                channel=channel
                             )
-                            task['steps']['content_strategy_update']['result'] = strategy_update
+                            task['steps']['content_strategy_update']['result'] = new_strategy
                             task['steps']['content_strategy_update']['status'] = 'completed'
                             break
                         else:
@@ -1557,25 +1933,23 @@ class Orchestrator:
                             raise
                 self._persist_task(task)
             
+            # Optimización de CTA
             if task['steps']['cta_optimization']['status'] == 'pending':
                 task['steps']['cta_optimization']['status'] = 'processing'
                 self._persist_task(task)
-                cta_optimization = None
                 for attempt in range(self.max_retries + 1):
                     try:
-                        reputation_engine = self._load_subsystem('optimization', 'reputation_engine')
-                        if reputation_engine:
-                            cta_optimization = reputation_engine.optimize_ctas(
+                        revenue_optimizer = self._load_subsystem('monetization', 'revenue_optimizer')
+                        if revenue_optimizer:
+                            cta_strategy = revenue_optimizer.optimize_cta(
                                 channel_id=channel_id,
-                                performance=task['steps']['performance_analysis']['result']
+                                performance_data=task['steps']['performance_analysis']['result']
                             )
-                            task['steps']['cta_optimization']['result'] = cta_optimization
+                            task['steps']['cta_optimization']['result'] = cta_strategy
                             task['steps']['cta_optimization']['status'] = 'completed'
                             break
                         else:
-                            task['steps']['cta_optimization']['result'] = {'optimized': False, 'reason': 'Module not available'}
-                            task['steps']['cta_optimization']['status'] = 'completed'
-                            break
+                            raise Exception("Revenue optimizer not available")
                     except Exception as e:
                         task['steps']['cta_optimization']['retries'] = attempt + 1
                         if attempt < self.max_retries:
@@ -1588,25 +1962,24 @@ class Orchestrator:
                             raise
                 self._persist_task(task)
             
+            # Optimización de monetización
             if task['steps']['monetization_optimization']['status'] == 'pending':
                 task['steps']['monetization_optimization']['status'] = 'processing'
                 self._persist_task(task)
-                monetization_optimization = None
                 for attempt in range(self.max_retries + 1):
                     try:
                         revenue_optimizer = self._load_subsystem('monetization', 'revenue_optimizer')
                         if revenue_optimizer:
-                            monetization_optimization = revenue_optimizer.optimize_channel(
+                            monetization_strategy = revenue_optimizer.optimize_monetization(
                                 channel_id=channel_id,
-                                performance=task['steps']['performance_analysis']['result']
+                                performance_data=task['steps']['performance_analysis']['result'],
+                                content_strategy=task['steps']['content_strategy_update']['result']
                             )
-                            task['steps']['monetization_optimization']['result'] = monetization_optimization
+                            task['steps']['monetization_optimization']['result'] = monetization_strategy
                             task['steps']['monetization_optimization']['status'] = 'completed'
                             break
                         else:
-                            task['steps']['monetization_optimization']['result'] = {'optimized': False, 'reason': 'Module not available'}
-                            task['steps']['monetization_optimization']['status'] = 'completed'
-                            break
+                            raise Exception("Revenue optimizer not available")
                     except Exception as e:
                         task['steps']['monetization_optimization']['retries'] = attempt + 1
                         if attempt < self.max_retries:
@@ -1619,103 +1992,78 @@ class Orchestrator:
                             raise
                 self._persist_task(task)
             
+            # Marcar tarea como completada
             task['status'] = 'completed'
             task['completed_at'] = datetime.datetime.now().isoformat()
             self._persist_task(task)
+            self.task_history.append(task)
+            del self.current_tasks[task_id]
+            
+            logger.info(f"Tarea de optimización completada: {task_id}")
+            activity_logger.info(f"Tarea de optimización {task_id} completada para canal {channel_id}")
             
             notifier = self._load_component('notifier')
             if notifier:
                 notifier.send_notification(
                     title=f"Optimización completada para {channel['name']}",
-                    message="Se ha optimizado el canal con éxito",
+                    message=f"Tarea de optimización {task_id} completada exitosamente.",
                     level="info"
                 )
             
-            knowledge_base = self._load_component('knowledge_base')
-            if knowledge_base:
-                knowledge_base.save_optimization(task)
-                knowledge_base.update_channel(channel)
-            
-            logger.info(f"Tarea de optimización completada: {task_id}")
-            
         except Exception as e:
-            logger.error(f"Error en proceso de optimización: {str(e)}")
             task['status'] = 'failed'
             task['error'] = str(e)
-            task['failed_at'] = datetime.datetime.now().isoformat()
             self._persist_task(task)
+            logger.error(f"Error en tarea de optimización {task_id}: {str(e)}")
+            activity_logger.error(f"Fallo en tarea de optimización {task_id} para canal {channel_id}: {str(e)}")
             
             notifier = self._load_component('notifier')
             if notifier:
                 notifier.send_notification(
                     title=f"Error en optimización para {channel['name']}",
-                    message=f"Error: {str(e)}",
+                    message=f"Fallo en tarea {task_id}: {str(e)}",
                     level="error"
                 )
-        
-        finally:
-            self.task_history.append(task)
-            if task_id in self.current_tasks:
-                del self.current_tasks[task_id]
-            if task_id in self.paused_tasks:
-                del self.paused_tasks[task_id]
-    
-        def _process_shadowban_recovery(self, task_id: str):
-        """Procesa una tarea de recuperación de shadowban con reintentos"""
+
+    def _process_shadowban_recovery(self, task_id: str):
+        """Procesa una tarea de recuperación de shadowban"""
         task = self.current_tasks.get(task_id)
         if not task:
-            logger.error(f"Tarea {task_id} no encontrada para recuperación de shadowban")
             return
-
+            
         task['status'] = 'processing'
         self._persist_task(task)
         channel_id = task['channel_id']
         platform = task['platform']
-        channel = self.channels.get(channel_id, {})
-
+        channel = self.channels[channel_id]
+        
         try:
-            # Paso 1: Pausar publicaciones
+            # Pausar publicaciones
             if task['steps']['pause_publications']['status'] == 'pending':
                 task['steps']['pause_publications']['status'] = 'processing'
                 self._persist_task(task)
-                for attempt in range(self.max_retries + 1):
-                    try:
-                        # Pausar todas las tareas de publicación para la plataforma afectada
-                        for t_id, t in self.current_tasks.items():
-                            if t['channel_id'] == channel_id and t['type'] == 'content_creation':
-                                if platform in self.channels[channel_id]['platforms']:
-                                    t['status'] = 'paused'
-                                    t['paused_reason'] = f"Shadowban en {platform}"
-                                    self.paused_tasks[t_id] = t
-                                    self._persist_task(t)
-                                    logger.info(f"Tarea {t_id} pausada por shadowban en {platform}")
+                try:
+                    platform_adapter = self._load_subsystem('publication', f'{platform}_adapter')
+                    if platform_adapter:
+                        platform_adapter.pause_publications(channel_id)
                         task['steps']['pause_publications']['status'] = 'completed'
-                        break
-                    except Exception as e:
-                        task['steps']['pause_publications']['retries'] = attempt + 1
-                        if attempt < self.max_retries:
-                            delay = self._calculate_retry_delay(attempt)
-                            logger.warning(f"Reintento {attempt + 1}/{self.max_retries} para pause_publications: {str(e)}, esperando {delay}s")
-                            time.sleep(delay)
-                        else:
-                            task['steps']['pause_publications']['status'] = 'failed'
-                            task['steps']['pause_publications']['error'] = str(e)
-                            raise
+                    else:
+                        raise Exception(f"Platform adapter for {platform} not available")
+                except Exception as e:
+                    task['steps']['pause_publications']['status'] = 'failed'
+                    task['steps']['pause_publications']['error'] = str(e)
+                    raise
                 self._persist_task(task)
-
-            # Paso 2: Analizar causa del shadowban
+            
+            # Analizar causa
             if task['steps']['analyze_cause']['status'] == 'pending':
                 task['steps']['analyze_cause']['status'] = 'processing'
                 self._persist_task(task)
-                cause_analysis = None
                 for attempt in range(self.max_retries + 1):
                     try:
                         shadowban_detector = self._load_component('shadowban_detector')
                         if shadowban_detector:
-                            cause_analysis = shadowban_detector.analyze_shadowban_cause(
-                                channel_id=channel_id,
-                                platform=platform
-                            )
+                            cause_analysis = shadowban_detector.analyze_shadowban_cause(channel_id, platform)
                             task['steps']['analyze_cause']['result'] = cause_analysis
                             task['steps']['analyze_cause']['status'] = 'completed'
                             break
@@ -1732,73 +2080,58 @@ class Orchestrator:
                             task['steps']['analyze_cause']['error'] = str(e)
                             raise
                 self._persist_task(task)
-
-            # Paso 3: Implementar correcciones
+            
+            # Implementar corrección
             if task['steps']['implement_fix']['status'] == 'pending':
                 task['steps']['implement_fix']['status'] = 'processing'
                 self._persist_task(task)
-                recovery_plan = self._create_recovery_plan(channel_id)
-                for attempt in range(self.max_retries + 1):
-                    try:
-                        compliance_checker = self._load_subsystem('compliance', 'compliance_checker')
-                        if compliance_checker:
-                            # Aplicar restricciones de contenido según el plan de recuperación
-                            compliance_checker.apply_recovery_restrictions(
-                                channel_id=channel_id,
-                                platform=platform,
-                                restrictions=recovery_plan['content_restrictions']
-                            )
-                            task['steps']['implement_fix']['result'] = {
-                                'restrictions_applied': recovery_plan['content_restrictions'],
-                                'plan': recovery_plan
-                            }
-                            task['steps']['implement_fix']['status'] = 'completed'
-                            break
-                        else:
-                            raise Exception("Compliance checker not available")
-                    except Exception as e:
-                        task['steps']['implement_fix']['retries'] = attempt + 1
-                        if attempt < self.max_retries:
-                            delay = self._calculate_retry_delay(attempt)
-                            logger.warning(f"Reintento {attempt + 1}/{self.max_retries} para implement_fix: {str(e)}, esperando {delay}s")
-                            time.sleep(delay)
-                        else:
-                            task['steps']['implement_fix']['status'] = 'failed'
-                            task['steps']['implement_fix']['error'] = str(e)
-                            raise
+                try:
+                    # Crear plan de recuperación si no existe
+                    if channel_id not in self.recovery_plans:
+                        recovery_plan = self._create_recovery_plan(channel_id)
+                        task['steps']['implement_fix']['result'] = recovery_plan
+                    else:
+                        task['steps']['implement_fix']['result'] = self.recovery_plans[channel_id]
+                    
+                    # Aplicar restricciones de recuperación
+                    compliance_checker = self._load_subsystem('compliance', 'compliance_checker')
+                    if compliance_checker:
+                        compliance_checker.apply_recovery_restrictions(
+                            channel_id=channel_id,
+                            platform=platform,
+                            restrictions=task['steps']['implement_fix']['result']['content_restrictions']
+                        )
+                    
+                    task['steps']['implement_fix']['status'] = 'completed'
+                except Exception as e:
+                    task['steps']['implement_fix']['status'] = 'failed'
+                    task['steps']['implement_fix']['error'] = str(e)
+                    raise
                 self._persist_task(task)
-
-            # Paso 4: Verificar resolución
+            
+            # Verificar resolución
             if task['steps']['verify_resolution']['status'] == 'pending':
                 task['steps']['verify_resolution']['status'] = 'processing'
                 self._persist_task(task)
-                resolution_verified = False
                 for attempt in range(self.max_retries + 1):
                     try:
-                        platform_adapter = self._load_subsystem('publication', f'{platform}_adapter')
-                        if platform_adapter:
-                            # Verificar token para plataformas OAuth
-                            if platform in self.oauth_platforms:
-                                token_expiry = self.config['platforms'][platform].get('token_expiry')
-                                if not token_expiry or datetime.datetime.fromisoformat(token_expiry) <= datetime.datetime.now():
-                                    if not self._refresh_platform_token(platform):
-                                        raise Exception(f"No se pudo refrescar token para {platform}")
-
-                            result = platform_adapter.check_shadowban(
-                                channel_id=self.channels[channel_id].get(f'{platform}_id', '')
-                            )
+                        shadowban_detector = self._load_component('shadowban_detector')
+                        if shadowban_detector:
+                            result = shadowban_detector.check_shadowban(channel_id, platform)
                             if not result.get('is_shadowbanned', False):
-                                resolution_verified = True
-                                task['steps']['verify_resolution']['result'] = {'shadowban_resolved': True}
+                                task['steps']['verify_resolution']['result'] = {'resolved': True}
                                 task['steps']['verify_resolution']['status'] = 'completed'
                                 self.shadowban_status[f"{channel_id}_{platform}"]['active'] = False
-                                self.shadowban_history[channel_id][-1]['resolved'] = True
-                                self.shadowban_history[channel_id][-1]['resolved_at'] = datetime.datetime.now().isoformat()
+                                if channel_id in self.shadowban_history:
+                                    for entry in self.shadowban_history[channel_id]:
+                                        if entry['platform'] == platform and not entry.get('resolved', False):
+                                            entry['resolved'] = True
+                                            entry['resolved_at'] = datetime.datetime.now().isoformat()
                                 break
                             else:
-                                raise Exception("Shadowban persists")
+                                raise Exception("Shadowban still active")
                         else:
-                            raise Exception(f"Platform adapter for {platform} not available")
+                            raise Exception("Shadowban detector not available")
                     except Exception as e:
                         task['steps']['verify_resolution']['retries'] = attempt + 1
                         if attempt < self.max_retries:
@@ -1810,141 +2143,136 @@ class Orchestrator:
                             task['steps']['verify_resolution']['error'] = str(e)
                             raise
                 self._persist_task(task)
-
+            
+            # Marcar tarea como completada
             task['status'] = 'completed'
             task['completed_at'] = datetime.datetime.now().isoformat()
             self._persist_task(task)
-
+            self.task_history.append(task)
+            del self.current_tasks[task_id]
+            
+            logger.info(f"Tarea de recuperación de shadowban completada: {task_id}")
+            activity_logger.info(f"Tarea de recuperación {task_id} completada para canal {channel_id} en {platform}")
+            
             notifier = self._load_component('notifier')
             if notifier:
                 notifier.send_notification(
-                    title=f"Recuperación de shadowban completada para {channel['name']} en {platform}",
-                    message="El proceso de recuperación ha finalizado con éxito.",
+                    title=f"Recuperación de shadowban completada para {channel['name']}",
+                    message=f"Tarea de recuperación {task_id} completada en {platform}.",
                     level="info"
                 )
-
-            knowledge_base = self._load_component('knowledge_base')
-            if knowledge_base:
-                knowledge_base.save_recovery_task(task)
-
-            logger.info(f"Tarea de recuperación de shadowban completada: {task_id}")
-            activity_logger.info(f"Recuperación de shadowban completada para canal {channel_id} en {platform}")
-
+            
         except Exception as e:
-            logger.error(f"Error en proceso de recuperación de shadowban: {str(e)}")
             task['status'] = 'failed'
             task['error'] = str(e)
-            task['failed_at'] = datetime.datetime.now().isoformat()
             self._persist_task(task)
-
+            logger.error(f"Error en tarea de recuperación de shadowban {task_id}: {str(e)}")
+            activity_logger.error(f"Fallo en tarea de recuperación {task_id} para canal {channel_id} en {platform}: {str(e)}")
+            
             notifier = self._load_component('notifier')
             if notifier:
                 notifier.send_notification(
-                    title=f"Error en recuperación de shadowban para {channel['name']} en {platform}",
-                    message=f"Error: {str(e)}",
+                    title=f"Error en recuperación de shadowban para {channel['name']}",
+                    message=f"Fallo en tarea {task_id} en {platform}: {str(e)}",
                     level="error"
                 )
 
-        finally:
-            self.task_history.append(task)
-            if task_id in self.current_tasks:
-                del self.current_tasks[task_id]
-            if task_id in self.paused_tasks:
-                del self.paused_tasks[task_id]
-
-    def _handle_authentication_error(self, platform: str, error: Exception) -> bool:
-        """Maneja errores de autenticación para plataformas OAuth"""
-        if platform in self.oauth_platforms:
-            logger.warning(f"Error de autenticación en {platform}: {str(error)}")
-            # Intentar refrescar el token
-            if self._refresh_platform_token(platform):
-                logger.info(f"Token refrescado tras error de autenticación en {platform}")
-                return True
-            else:
-                logger.error(f"No se pudo refrescar token para {platform}, iniciando nuevo flujo OAuth")
-                if self._initialize_oauth_platform(platform):
-                    logger.info(f"Nuevo flujo OAuth completado para {platform}")
-                    return True
-                else:
-                    logger.error(f"Fallo en la autenticación para {platform}")
-                    return False
-        return False
-
-    def get_recovery_status(self, channel_id: str) -> Dict:
-        """Obtiene el estado actual de recuperación de un canal"""
-        if channel_id not in self.channels:
-            return {'success': False, 'error': 'Channel not found'}
-
-        recovery_status = {
-            'channel_id': channel_id,
-            'status': self.channel_status.get(channel_id, ChannelStatus.ACTIVE),
-            'shadowban_history': self.shadowban_history.get(channel_id, []),
-            'recovery_plan': self.recovery_plans.get(channel_id, None),
-            'active_shadowbans': {
-                platform: status for platform, status in self.shadowban_status.items()
-                if platform.startswith(channel_id) and status['active']
-            }
-        }
-        return {'success': True, 'recovery_status': recovery_status}
-
-    def manual_resume_tasks(self, channel_id: str, platform: str = None) -> Dict:
-        """Reanuda manualmente tareas pausadas para un canal y plataforma específica"""
-        if channel_id not in self.channels:
-            return {'success': False, 'error': 'Channel not found'}
-
-        resumed_tasks = []
-        tasks_to_resume = []
-
-        for task_id, task in self.paused_tasks.items():
-            if task['channel_id'] == channel_id:
-                if platform and task.get('paused_reason', '').endswith(platform):
-                    tasks_to_resume.append(task_id)
-                elif not platform:
-                    tasks_to_resume.append(task_id)
-
-        for task_id in tasks_to_resume:
-            task = self.paused_tasks[task_id]
-            task['status'] = 'initiated'
-            task['priority'] = task.get('priority', Priority.NORMAL)
-            self.task_queue.put((task['priority'], task))
-            self.current_tasks[task_id] = task
-            self._persist_task(task)
-            resumed_tasks.append(task_id)
-            logger.info(f"Tarea {task_id} reanudada manualmente para canal {channel_id}")
-            activity_logger.info(f"Tarea {task_id} reanudada manualmente para canal {channel_id}")
-
-        for task_id in resumed_tasks:
-            del self.paused_tasks[task_id]
-
-        return {
-            'success': True,
-            'resumed_tasks': resumed_tasks,
-            'message': f"{len(resumed_tasks)} tareas reanudadas para canal {channel_id}"
-        }
-
-    def update_platform_credentials(self, platform: str, credentials: Dict) -> bool:
-        """Actualiza las credenciales de una plataforma manualmente"""
-        if platform not in self.config.get('platforms', {}):
-            logger.error(f"Plataforma {platform} no encontrada en la configuración")
-            return False
-
+    def _should_optimize_channel(self, channel_id: str) -> bool:
+        """Determina si un canal necesita optimización"""
         try:
-            self._save_platform_credentials(platform, credentials)
-            self.config['platforms'][platform].update(credentials)
-            logger.info(f"Credenciales actualizadas manualmente para {platform}")
-            activity_logger.info(f"Credenciales actualizadas manualmente para {platform}")
-
-            # Verificar autenticación si es una plataforma OAuth
-            if platform in self.oauth_platforms:
-                if not self._initialize_oauth_platform(platform):
-                    logger.error(f"Error al verificar nuevas credenciales para {platform}")
-                    return False
-
-            return True
+            analytics_engine = self._load_component('analytics_engine')
+            if not analytics_engine:
+                return False
+                
+            stats = analytics_engine.get_channel_stats(channel_id)
+            if not stats:
+                return True  # Optimizar si no hay datos
+                
+            # Ejemplo de criterios para optimización
+            performance_threshold = 0.8
+            engagement_rate = stats.get('engagement_rate', 0.0)
+            growth_rate = stats.get('growth_rate', 0.0)
+            
+            return engagement_rate < performance_threshold or growth_rate < performance_threshold
+            
         except Exception as e:
-            logger.error(f"Error al actualizar credenciales para {platform}: {str(e)}")
+            logger.error(f"Error al verificar necesidad de optimización para canal {channel_id}: {str(e)}")
             return False
+
+    def _create_optimization_task(self, channel_id: str) -> None:
+        """Crea una tarea de optimización para un canal"""
+        self.optimize_channel(channel_id, Priority.HIGH)
+
+    def _handle_shadowban(self, channel_id: str, platform: str, detection_result: Dict) -> None:
+        """Maneja la detección de un shadowban"""
+        logger.info(f"Manejando shadowban para canal {channel_id} en {platform}")
+        
+        # Pausar publicaciones existentes
+        for task_id, task in list(self.current_tasks.items()):
+            if task.get('channel_id') == channel_id and task.get('type') == 'content_creation':
+                task['status'] = 'paused'
+                task['paused_reason'] = f"Shadowban en {platform}"
+                self.paused_tasks[task_id] = task
+                del self.current_tasks[task_id]
+                self._persist_task(task)
+                logger.info(f"Tarea {task_id} pausada por shadowban en {platform}")
+        
+        # Crear plan de recuperación
+        recovery_plan = self._create_recovery_plan(channel_id)
+        
+        # Registrar evento
+        activity_logger.info(f"Shadowban detectado para canal {channel_id} en {platform}. Plan de recuperación creado: {recovery_plan['duration_hours']} horas")
+        
+        # Crear tarea de recuperación
+        self.add_task({
+            'type': 'shadowban_recovery',
+            'channel_id': channel_id,
+            'platform': platform,
+            'detected_at': datetime.datetime.now().isoformat(),
+            'detection_result': detection_result,
+            'steps': {
+                'pause_publications': {'status': 'pending', 'retries': 0},
+                'analyze_cause': {'status': 'pending', 'retries': 0},
+                'implement_fix': {'status': 'pending', 'retries': 0},
+                'verify_resolution': {'status': 'pending', 'retries': 0}
+            }
+        }, Priority.CRITICAL)
+
+    def _update_system_metrics(self) -> None:
+        """Actualiza las métricas generales del sistema"""
+        try:
+            metrics = {
+                'active_channels': len(self.channels),
+                'shadowbanned_channels': sum(1 for status in self.channel_status.values() if status == ChannelStatus.SHADOWBANNED),
+                'recovering_channels': sum(1 for status in self.channel_status.values() if status == ChannelStatus.RECOVERING),
+                'total_tasks': len(self.current_tasks) + len(self.paused_tasks),
+                'completed_tasks': len(self.task_history),
+                'publication_metrics': self.get_publication_metrics()
+            }
+            
+            knowledge_base = self._load_component('knowledge_base')
+            if knowledge_base:
+                knowledge_base.save_system_metrics(metrics)
+            
+            logger.info("Métricas del sistema actualizadas")
+            activity_logger.info(f"Métricas actualizadas: {json.dumps(metrics, indent=2)}")
+            
+        except Exception as e:
+            logger.error(f"Error al actualizar métricas del sistema: {str(e)}")
 
 if __name__ == "__main__":
     orchestrator = Orchestrator()
-    orchestrator.start()
+    if orchestrator.start():
+        logger.info("Orchestrator iniciado desde línea de comandos")
+        try:
+            # Ejecutar pipeline inicial
+            orchestrator.run_pipeline()
+            
+            # Mantener el proceso activo
+            while True:
+                time.sleep(1)
+        except KeyboardInterrupt:
+            logger.info("Recibida señal de interrupción, deteniendo Orchestrator")
+            orchestrator.stop()
+    else:
+        logger.error("No se pudo iniciar el Orchestrator")

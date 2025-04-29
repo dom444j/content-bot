@@ -186,6 +186,21 @@ class Notifier:
             }
         }
         
+        # Configuración de llamadas de voz (para escalado crítico)
+        self.call_config = {
+            'enabled': False,
+            'twilio_account_sid': '',
+            'twilio_auth_token': '',
+            'from_number': '',
+            'to_numbers': []
+        }
+        
+        # Inicializar métricas
+        self._initialize_metrics()
+        
+        # Cargar plantillas de notificación
+        self.notification_templates = self._load_notification_templates()
+        
         # Validar configuración
         self._validate_channels_config()
         self._validate_user_configs()
@@ -355,6 +370,13 @@ class Notifier:
             'user_id': user_id
         }
         
+        # Verificar si debe suprimirse por duplicado
+        if self._should_suppress_duplicate(notification):
+            if hasattr(self, 'notification_metrics'):
+                self.notification_metrics['suppressed_count'] += 1
+            logger.info(f"Notificación {notification_id} suprimida por duplicado")
+            return notification_id
+        
         # Determinar canales a utilizar
         level_config = self.alert_levels_config[level]
         if channels is None:
@@ -365,6 +387,13 @@ class Notifier:
             'timestamp': datetime.datetime.now().timestamp(),
             'notification_id': notification_id
         })
+        
+        # Enviar a canales configurados
+        results = self._send_to_channels(notification, level_config)
+        
+        # Verificar si debe escalarse
+        if self._should_escalate(notification):
+            self._escalate_alert(notification)
         
         # Enviar a cada canal
         start_time = time.time()
@@ -463,10 +492,22 @@ class Notifier:
                 self._escalate_alert(notification, escalation_config['level'])
                 break
     
-    def _escalate_alert(self, notification: Dict, new_level: str):
+    def _escalate_alert(self, notification: Dict, new_level: str = None):
         """Escala una notificación a un nivel superior"""
+        if not new_level:
+            # Determinar nivel de escalado
+            current_level = notification['level']
+            if current_level == 'info':
+                new_level = 'warning'
+            elif current_level == 'warning':
+                new_level = 'critical'
+            else:
+                # Ya está en nivel crítico, no escalar más
+                return
+        
         notification['escalation_status'] = 'escalated'
-        self.notification_metrics['escalated_notifications'] += 1
+        if hasattr(self, 'notification_metrics'):
+            self.notification_metrics['escalated_notifications'] += 1
         
         new_subject = f"[ESCALATED] {notification['subject']}"
         new_message = (
@@ -474,6 +515,12 @@ class Notifier:
             f"Original: {notification['message']}\n\n"
             f"Razón: No resuelta tras {self.alert_levels_config[notification['level']]['escalation']['delay']} segundos"
         )
+        
+        # Si es crítico, considerar llamada de voz
+        if new_level == 'critical' and self.call_config.get('enabled'):
+            threading.Thread(target=self._send_voice_call, 
+                           args=(notification,), 
+                           daemon=True).start()
         
         self.send_notification(
             notification_type=f"{notification['type']}_escalated",
@@ -656,73 +703,111 @@ class Notifier:
                 webhooks = user_webhooks
         
         for webhook in webhooks:
-            url = webhook['url']
+                        url = webhook['url']
             format_type = webhook.get('format', 'json')
             headers = webhook.get('headers', {})
             timeout = config.get('timeout', 10)
             
-            try:
-                # Validar URL
-                parsed = urlparse(url)
-                if not parsed.scheme or not parsed.netloc:
-                    logger.warning(f"URL de webhook inválida: {url}")
-                    continue
-                
-                # Preparar payload
+            # Preparar payload según formato
+            if format_type == 'json':
                 payload = {
-                    'notification_id': notification['id'],
+                    'id': notification['id'],
                     'type': notification['type'],
                     'subject': notification['subject'],
                     'message': notification['message'],
                     'level': notification['level'],
                     'timestamp': notification['timestamp'],
                     'data': notification['data'],
-                    'escalation_status': notification['escalation_status']
+                    'emoji': level_config['emoji'],
+                    'user_id': notification['user_id']
                 }
+                headers['Content-Type'] = 'application/json'
+                data = json.dumps(payload)
+            elif format_type == 'form':
+                payload = {
+                    'notification_id': notification['id'],
+                    'notification_type': notification['type'],
+                    'subject': notification['subject'],
+                    'message': notification['message'],
+                    'level': notification['level'],
+                    'timestamp': notification['timestamp'],
+                    'user_id': notification['user_id'] or ''
+                }
+                # Añadir datos adicionales
+                for key, value in notification['data'].items():
+                    payload[f'data_{key}'] = str(value)
+                data = payload
+                headers['Content-Type'] = 'application/x-www-form-urlencoded'
+            elif format_type == 'xml':
+                root = ET.Element('notification')
+                ET.SubElement(root, 'id').text = notification['id']
+                ET.SubElement(root, 'type').text = notification['type']
+                ET.SubElement(root, 'subject').text = notification['subject']
+                ET.SubElement(root, 'message').text = notification['message']
+                ET.SubElement(root, 'level').text = notification['level']
+                ET.SubElement(root, 'timestamp').text = notification['timestamp']
+                ET.SubElement(root, 'emoji').text = level_config['emoji']
+                if notification['user_id']:
+                    ET.SubElement(root, 'user_id').text = notification['user_id']
                 
-                if format_type == 'xml':
-                    root = ET.Element('notification')
-                    for key, value in payload.items():
-                        child = ET.SubElement(root, key)
-                        child.text = str(value)
-                    payload_data = ET.tostring(root, encoding='unicode')
-                    headers['Content-Type'] = 'application/xml'
-                else:
-                    payload_data = json.dumps(payload)
-                    headers['Content-Type'] = 'application/json'
+                # Añadir datos adicionales
+                data_elem = ET.SubElement(root, 'data')
+                for key, value in notification['data'].items():
+                    item = ET.SubElement(data_elem, 'item')
+                    ET.SubElement(item, 'key').text = key
+                    ET.SubElement(item, 'value').text = str(value)
                 
-                # Enviar solicitud
-                response = requests.post(url, data=payload_data, headers=headers, timeout=timeout)
-                
-                if response.status_code not in (200, 201, 204):
-                    logger.error(f"Error al enviar webhook a {url}: {response.text}")
-                    raise Exception(f"Error de webhook: {response.status_code}")
-                
-                logger.info(f"Webhook enviado correctamente a {url}")
+                data = ET.tostring(root, encoding='utf-8')
+                headers['Content-Type'] = 'application/xml'
+            else:
+                # Formato desconocido, usar JSON por defecto
+                payload = {
+                    'id': notification['id'],
+                    'subject': notification['subject'],
+                    'message': notification['message'],
+                    'level': notification['level'],
+                    'timestamp': notification['timestamp']
+                }
+                headers['Content-Type'] = 'application/json'
+                data = json.dumps(payload)
             
-            except Exception as e:
-                logger.error(f"Error al enviar webhook a {url}: {str(e)}")
-                raise
+            # Enviar webhook
+            response = requests.post(url, data=data, headers=headers, timeout=timeout)
+            
+            if response.status_code >= 400:
+                logger.error(f"Error al enviar webhook a {url}: {response.status_code} {response.text}")
+                raise Exception(f"Error de webhook: {response.status_code}")
+            
+            logger.info(f"Webhook enviado a {url} correctamente")
     
     def _send_console(self, notification: Dict, level_config: Dict):
         """Muestra notificación en consola"""
-        print(f"\n{level_config['prefix']} {notification['subject']}")
-        print("-" * 50)
-        print(f"{level_config['emoji']} {notification['message']}")
+        prefix = level_config['prefix']
+        emoji = level_config['emoji']
+        
+        # Formatear mensaje para consola
+        console_message = f"\n{prefix} {emoji} {notification['subject']}\n"
+        console_message += f"{'-' * 50}\n"
+        console_message += f"{notification['message']}\n"
         
         if notification['data']:
-            print("\nDetalles adicionales:")
+            console_message += "\nDetalles adicionales:\n"
             for key, value in notification['data'].items():
-                print(f"- {key}: {value}")
+                console_message += f"- {key}: {value}\n"
         
-        print(f"\nFecha: {notification['timestamp']}")
-        if notification['escalation_status'] == 'escalated':
-            print(f"Estado: Escalada desde {notification['data'].get('original_level', 'desconocido')}")
+        console_message += f"\nFecha: {notification['timestamp']}"
+        console_message += f"\nID: {notification['id']}"
+        
         if notification['user_id']:
-            print(f"Usuario: {notification['user_id']}")
-        print("-" * 50)
+            console_message += f"\nUsuario: {notification['user_id']}"
         
-        logger.info("Notificación mostrada en consola")
+        if notification['escalation_status'] == 'escalated':
+            console_message += f"\nEstado: Escalada desde {notification['data'].get('original_level', 'desconocido')}"
+        
+        console_message += f"\n{'-' * 50}\n"
+        
+        # Imprimir en consola
+        print(console_message)
     
     def _send_log(self, notification: Dict, level_config: Dict):
         """Registra notificación en el log"""
@@ -737,8 +822,2190 @@ class Notifier:
         else:
             logger.info(log_message)
     
+    def _send_push_notification(self, notification: Dict, level_config: Dict, user_id: str = None):
+        """Envía notificación push a dispositivos móviles"""
+        try:
+            # Verificar si Firebase está configurado
+            if not hasattr(self, 'firebase_config') or not self.firebase_config.get('enabled'):
+                logger.warning("Firebase no está configurado para notificaciones push")
+                return
+            
+            # Importar Firebase Admin SDK
+            import firebase_admin
+            from firebase_admin import messaging
+            
+            # Inicializar Firebase si no está inicializado
+            if not hasattr(self, 'firebase_app'):
+                cred = firebase_admin.credentials.Certificate(self.firebase_config['credentials_file'])
+                self.firebase_app = firebase_admin.initialize_app(cred)
+            
+            # Determinar tokens de dispositivo
+            device_tokens = []
+            
+            if user_id and user_id in self.user_configs:
+                user_tokens = self.user_configs[user_id].get('device_tokens', [])
+                if user_tokens:
+                    device_tokens.extend(user_tokens)
+            else:
+                # Usar tokens predeterminados si no hay usuario específico
+                device_tokens.extend(self.firebase_config.get('default_tokens', []))
+            
+            if not device_tokens:
+                logger.warning("No hay tokens de dispositivo para enviar notificación push")
+                return
+            
+            # Crear mensaje
+            message = messaging.MulticastMessage(
+                notification=messaging.Notification(
+                    title=f"{level_config['emoji']} {notification['subject']}",
+                    body=notification['message']
+                ),
+                data={
+                    'notification_id': notification['id'],
+                    'notification_type': notification['type'],
+                    'level': notification['level'],
+                    'timestamp': notification['timestamp']
+                },
+                tokens=device_tokens,
+            )
+            
+            # Enviar mensaje
+            response = messaging.send_multicast(message)
+            logger.info(f"Notificación push enviada a {response.success_count} de {len(device_tokens)} dispositivos")
+            
+            # Registrar fallos
+            if response.failure_count > 0:
+                for idx, resp in enumerate(response.responses):
+                    if not resp.success:
+                        logger.error(f"Error al enviar push a token {device_tokens[idx]}: {resp.exception}")
+        
+        except ImportError:
+            logger.error("No se pudo importar Firebase Admin SDK. Instale con: pip install firebase-admin")
+        except Exception as e:
+            logger.error(f"Error al enviar notificación push: {str(e)}")
+            raise
+    
+    def _send_telegram(self, notification: Dict, level_config: Dict, user_id: str = None):
+        """Envía notificación por Telegram"""
+        config = self.notification_channels['telegram']
+        chat_id = config['chat_id']
+        
+        if user_id and user_id in self.user_configs:
+            user_chat_id = self.user_configs[user_id].get('telegram_chat_id')
+            if user_chat_id:
+                chat_id = user_chat_id
+        
+        message = f"{level_config['emoji']} *{notification['subject']}*\n\n{notification['message']}\n"
+        
+        if notification['data']:
+            message += "\n*Detalles adicionales:*\n"
+            for key, value in notification['data'].items():
+                message += f"- {key}: {value}\n"
+        
+        if notification['escalation_status'] == 'escalated':
+            message += f"\n*Escalada desde*: {notification['data'].get('original_level', 'desconocido')}"
+        
+        url = f"https://api.telegram.org/bot{config['bot_token']}/sendMessage"
+        payload = {
+            'chat_id': chat_id,
+            'text': message,
+            'parse_mode': 'Markdown'
+        }
+        
+        response = requests.post(url, json=payload)
+        
+        if response.status_code != 200:
+            logger.error(f"Error al enviar mensaje a Telegram: {response.text}")
+            raise Exception(f"Error de Telegram: {response.status_code}")
+        
+        logger.info("Mensaje enviado a Telegram correctamente")
+    
+    def _send_discord(self, notification: Dict, level_config: Dict):
+        """Envía notificación por Discord"""
+        config = self.notification_channels['discord']
+        
+        embed = {
+            'title': f"{level_config['emoji']} {notification['subject']}",
+            'description': notification['message'],
+            'color': level_config['color'],
+            'fields': [],
+            'timestamp': notification['timestamp']
+        }
+        
+        if notification['data']:
+            for key, value in notification['data'].items():
+                embed['fields'].append({
+                    'name': key,
+                    'value': str(value),
+                    'inline': True
+                })
+        
+        if notification['escalation_status'] == 'escalated':
+            embed['fields'].append({
+                'name': 'Estado',
+                'value': f"Escalada desde {notification['data'].get('original_level', 'desconocido')}",
+                'inline': True
+            })
+        
+        payload = {
+            'embeds': [embed],
+            'username': 'Content Bot Notifier'
+        }
+        
+        response = requests.post(config['webhook_url'], json=payload)
+        
+        if response.status_code != 204:
+            logger.error(f"Error al enviar mensaje a Discord: {response.text}")
+            raise Exception(f"Error de Discord: {response.status_code}")
+        
+        logger.info("Mensaje enviado a Discord correctamente")
+    
+    def _send_teams(self, notification: Dict, level_config: Dict):
+        """Envía notificación a Microsoft Teams"""
+        try:
+            # Verificar si Teams está configurado
+            if not hasattr(self, 'teams_config') or not self.teams_config.get('enabled'):
+                logger.warning("Microsoft Teams no está configurado")
+                return
+            
+            webhook_url = self.teams_config.get('webhook_url')
+            if not webhook_url:
+                logger.warning("URL de webhook de Teams no configurada")
+                return
+            
+            # Crear tarjeta adaptativa para Teams
+            card = {
+                "@type": "MessageCard",
+                "@context": "http://schema.org/extensions",
+                "themeColor": hex(level_config['color'])[2:],
+                "summary": notification['subject'],
+                "sections": [
+                    {
+                        "activityTitle": f"{level_config['emoji']} {notification['subject']}",
+                        "activitySubtitle": f"Nivel: {notification['level'].upper()}",
+                        "activityImage": self._get_level_image(notification['level']),
+                        "text": notification['message'],
+                        "facts": [
+                            {
+                                "name": "ID",
+                                "value": notification['id']
+                            },
+                            {
+                                "name": "Tipo",
+                                "value": notification['type']
+                            },
+                            {
+                                "name": "Fecha",
+                                "value": notification['timestamp']
+                            }
+                        ]
+                    }
+                ]
+            }
+            
+            # Añadir datos adicionales
+            if notification['data']:
+                facts = []
+                for key, value in notification['data'].items():
+                    facts.append({
+                        "name": key,
+                        "value": str(value)
+                    })
+                
+                card['sections'].append({
+                    "title": "Detalles adicionales",
+                    "facts": facts
+                })
+            
+            # Añadir acciones si es crítico
+            if notification['level'] == 'critical':
+                card['potentialAction'] = [
+                    {
+                        "@type": "OpenUri",
+                        "name": "Ver en panel",
+                        "targets": [
+                            {
+                                "os": "default",
+                                "uri": f"https://dashboard.example.com/notifications/{notification['id']}"
+                            }
+                        ]
+                    }
+                ]
+            
+            # Enviar a Teams
+            response = requests.post(webhook_url, json=card)
+            
+            if response.status_code >= 400:
+                logger.error(f"Error al enviar a Teams: {response.status_code} {response.text}")
+                raise Exception(f"Error de Teams: {response.status_code}")
+            
+            logger.info("Mensaje enviado a Microsoft Teams correctamente")
+        
+        except Exception as e:
+            logger.error(f"Error al enviar notificación a Teams: {str(e)}")
+            raise
+    
+    def _get_level_image(self, level: str) -> str:
+        """Obtiene URL de imagen para nivel de alerta"""
+        # Imágenes predeterminadas para cada nivel
+        level_images = {
+            'info': 'https://example.com/images/info.png',
+            'warning': 'https://example.com/images/warning.png',
+            'critical': 'https://example.com/images/critical.png'
+        }
+        
+        # Usar imágenes personalizadas si están configuradas
+        if hasattr(self, 'notification_images') and level in self.notification_images:
+            return self.notification_images[level]
+        
+        return level_images.get(level, level_images['info'])
+    
+    def _send_to_channels(self, notification: Dict, level_config: Dict) -> Dict:
+        """
+        Envía notificación a todos los canales activos configurados
+        
+        Args:
+            notification: Datos de la notificación
+            level_config: Configuración del nivel de alerta
+            
+        Returns:
+            Diccionario con resultados por canal
+        """
+        results = {
+            'success': [],
+            'failure': []
+        }
+        
+        # Obtener canales activos para este nivel
+        channels = self._get_active_channels(notification['level'], notification['user_id'])
+        
+        # Enviar a cada canal
+        for channel in channels:
+            try:
+                self._send_to_channel(channel, notification, notification['user_id'])
+                results['success'].append(channel)
+                
+                # Actualizar métricas
+                if hasattr(self, 'notification_metrics'):
+                    self.notification_metrics['success_channels'] += 1
+                    self.notification_metrics['total_channels'] += 1
+            except Exception as e:
+                logger.error(f"Error al enviar a canal {channel}: {str(e)}")
+                results['failure'].append(channel)
+                
+                # Actualizar métricas
+                if hasattr(self, 'notification_metrics'):
+                    self.notification_metrics['total_channels'] += 1
+        
+        return results
+    
+    def _get_active_channels(self, level: str, user_id: str = None) -> List[str]:
+        """
+        Obtiene canales activos para un nivel y usuario
+        
+        Args:
+            level: Nivel de alerta
+            user_id: ID de usuario opcional
+            
+        Returns:
+            Lista de canales activos
+        """
+        # Canales predeterminados para el nivel
+        default_channels = self.alert_levels_config[level]['channels']
+        
+        # Filtrar solo canales habilitados
+        active_channels = [
+            ch for ch in default_channels 
+            if ch in self.notification_channels and self.notification_channels[ch].get('enabled', False)
+        ]
+        
+        # Aplicar preferencias de usuario si existe
+        if user_id and user_id in self.user_configs:
+            user_channels = self.user_configs[user_id].get('channels', [])
+            # Intersección de canales de usuario y canales activos para este nivel
+            active_channels = [ch for ch in user_channels if ch in active_channels]
+        
+        return active_channels
+    
+    def _should_suppress_duplicate(self, notification: Dict) -> bool:
+        """
+        Determina si una notificación debe suprimirse por ser duplicada
+        
+        Args:
+            notification: Datos de la notificación
+            
+        Returns:
+            True si debe suprimirse, False en caso contrario
+        """
+        # Verificar historial reciente
+        recent_notifications = []
+        current_time = datetime.datetime.now().timestamp()
+        
+        # Obtener ventana de supresión para este nivel
+        suppression_window = self.alert_levels_config[notification['level']]['suppression_window']
+        
+        # Filtrar notificaciones recientes dentro de la ventana de tiempo
+        for notif in self.notification_history:
+            notif_time = datetime.datetime.fromisoformat(notif['timestamp']).timestamp()
+            if current_time - notif_time <= suppression_window:
+                recent_notifications.append(notif)
+        
+        # Buscar duplicados
+        for recent in recent_notifications:
+            if self._are_notifications_similar(notification, recent):
+                logger.info(f"Notificación similar encontrada: {recent['id']}, suprimiendo nueva notificación")
+                return True
+        
+        return False
+    
+    def _are_notifications_similar(self, notif1: Dict, notif2: Dict) -> bool:
+        """
+        Compara dos notificaciones para determinar si son similares
+        
+        Args:
+            notif1: Primera notificación
+            notif2: Segunda notificación
+            
+        Returns:
+            True si son similares, False en caso contrario
+        """
+        # Si son del mismo tipo y nivel, comparar contenido
+        if notif1['type'] == notif2['type'] and notif1['level'] == notif2['level']:
+            # Comparar asunto (puede tener pequeñas variaciones)
+            from difflib import SequenceMatcher
+            subject_similarity = SequenceMatcher(None, notif1['subject'], notif2['subject']).ratio()
+            
+            # Si el asunto es muy similar, considerar duplicado
+            if subject_similarity > 0.8:
+                return True
+            
+            # Comparar datos clave si existen
+            if notif1.get('data') and notif2.get('data'):
+                # Verificar si tienen las mismas claves principales
+                keys1 = set(notif1['data'].keys())
+                keys2 = set(notif2['data'].keys())
+                common_keys = keys1.intersection(keys2)
+                
+                # Si tienen claves en común, verificar valores
+                if common_keys:
+                    matches = 0
+                    for key in common_keys:
+                        if str(notif1['data'][key]) == str(notif2['data'][key]):
+                            matches += 1
+                    
+                    # Si más del 70% de los valores coinciden, considerar duplicado
+                    if matches / len(common_keys) > 0.7:
+                        return True
+        
+        return False
+    
+    def _should_escalate(self, notification: Dict) -> bool:
+        """
+        Determina si una notificación debe escalarse inmediatamente
+        
+        Args:
+            notification: Datos de la notificación
+            
+        Returns:
+            True si debe escalarse, False en caso contrario
+        """
+        # Verificar si el nivel actual permite escalado
+        current_level = notification['level']
+        if current_level == 'critical':
+            # Ya está en nivel máximo
+            return False
+        
+        # Verificar condiciones de escalado inmediato
+        
+        # 1. Verificar si hay muchas notificaciones similares recientes
+        similar_count = 0
+        current_time = datetime.datetime.now().timestamp()
+        
+        # Contar notificaciones similares en la última hora
+        for notif in self.notification_history:
+            notif_time = datetime.datetime.fromisoformat(notif['timestamp']).timestamp()
+            if current_time - notif_time <= 3600 and notif['type'] == notification['type']:
+                similar_count += 1
+        
+        # Si hay más de 5 notificaciones similares en la última hora, escalar
+        if similar_count >= 5:
+            logger.info(f"Escalando notificación debido a frecuencia alta: {similar_count} en la última hora")
+            return True
+        
+        # 2. Verificar palabras clave de escalado en el mensaje
+        escalation_keywords = [
+            'crítico', 'crítica', 'urgente', 'inmediato', 'inmediata',
+            'fallo grave', 'error crítico', 'shadowban', 'suspensión',
+            'violación', 'bloqueo', 'pérdida de datos'
+        ]
+        
+        message_lower = notification['message'].lower()
+        subject_lower = notification['subject'].lower()
+        
+        for keyword in escalation_keywords:
+            if keyword in message_lower or keyword in subject_lower:
+                logger.info(f"Escalando notificación debido a palabra clave: '{keyword}'")
+                return True
+        
+        # 3. Verificar datos específicos que indiquen gravedad
+        data = notification.get('data', {})
+        
+        # Verificar métricas críticas
+        if 'error_count' in data and data['error_count'] > 10:
+            return True
+        
+        if 'impact_level' in data and data['impact_level'] in ['high', 'critical', 'alto', 'crítico']:
+            return True
+        
+        if 'revenue_impact' in data and data['revenue_impact'] > 100:
+            return True
+        
+        return False
+    
+    def _escalate_alert(self, notification: Dict, new_level: str = None):
+        """Escala una notificación a un nivel superior"""
+        if not new_level:
+            # Determinar nivel de escalado
+            current_level = notification['level']
+            if current_level == 'info':
+                new_level = 'warning'
+            elif current_level == 'warning':
+                new_level = 'critical'
+            else:
+                # Ya está en nivel crítico, no escalar más
+                return
+        
+        notification['escalation_status'] = 'escalated'
+        if hasattr(self, 'notification_metrics'):
+            self.notification_metrics['escalated_notifications'] += 1
+        
+        new_subject = f"[ESCALATED] {notification['subject']}"
+        new_message = (
+            f"⚠️ ALERTA ESCALADA desde {notification['level'].upper()} a {new_level.upper()}\n\n"
+            f"Original: {notification['message']}\n\n"
+            f"Razón: No resuelta tras {self.alert_levels_config[notification['level']]['escalation']['delay']} segundos"
+        )
+        
+        # Si es crítico, considerar llamada de voz
+        if new_level == 'critical' and self.call_config.get('enabled'):
+            threading.Thread(target=self._send_voice_call, 
+                           args=(notification,), 
+                           daemon=True).start()
+        
+        self.send_notification(
+            notification_type=f"{notification['type']}_escalated",
+            subject=new_subject,
+            message=new_message,
+            data={
+                **notification['data'],
+                'original_level': notification['level'],
+                'escalation_time': datetime.datetime.now().isoformat()
+            },
+            level=new_level,
+            user_id=notification['user_id']
+        )
+        logger.info(f"Notificación {notification['id']} escalada a {new_level}")
+    
+    def _send_voice_call(self, notification: Dict):
+        """
+        Realiza llamada de voz para alertas críticas
+        
+        Args:
+            notification: Datos de la notificación
+        
+        Returns:
+            True si la llamada se realizó correctamente, False en caso contrario
+        """
+        try:
+            # Verificar si Twilio está configurado
+            if not self.call_config.get('enabled'):
+                logger.warning("Llamadas de voz no están habilitadas")
+                return False
+            
+            # Importar Twilio
+            from twilio.rest import Client
+            
+            # Configuración de Twilio
+            account_sid = self.call_config['twilio_account_sid']
+            auth_token = self.call_config['twilio_auth_token']
+            from_number = self.call_config['from_number']
+            
+            # Determinar destinatarios
+            recipients = self.call_config['to_numbers']
+            
+            # Si hay un usuario específico, usar sus números
+            if notification.get('user_id') and notification['user_id'] in self.user_configs:
+                user_numbers = self.user_configs[notification['user_id']].get('phone_numbers', [])
+                if user_numbers:
+                    recipients = user_numbers
+            
+            if not recipients:
+                logger.warning("No hay destinatarios para llamada de voz")
+                return False
+            
+            # Crear cliente Twilio
+            client = Client(account_sid, auth_token)
+            
+            # Preparar mensaje TwiML
+            twiml = f"""
+            <?xml version="1.0" encoding="UTF-8"?>
+            <Response>
+                <Say voice="woman" language="es-ES">
+                    Alerta crítica del sistema de monetización de contenido.
+                    {notification['subject']}.
+                    {notification['message']}.
+                    Esta alerta requiere atención inmediata.
+                </Say>
+                <Pause length="1"/>
+                <Say voice="woman" language="es-ES">
+                    Repito, alerta crítica del sistema.
+                    {notification['subject']}.
+                    Por favor, revise el panel de control para más detalles.
+                </Say>
+            </Response>
+            """
+            
+            # Determinar URL de TwiML
+            twiml_url = None
+            
+            # Opción 1: Usar Twilio Bin (recomendado para producción)
+            if hasattr(self, 'twilio_bin_id') and self.twilio_bin_id:
+                # Actualizar TwiML Bin existente
+                try:
+                    client.twiml_bins(self.twilio_bin_id).update(twiml=twiml)
+                    twiml_url = f"https://handler.twilio.com/twiml/{self.twilio_bin_id}"
+                except Exception as e:
+                    logger.error(f"Error al actualizar TwiML Bin: {str(e)}")
+                    # Continuar con opción alternativa
+            
+            # Opción 2: Guardar TwiML localmente y servir desde servidor web
+            if not twiml_url:
+                # Crear directorio temporal si no existe
+                twiml_path = os.path.join('temp', f"call_{notification['id']}.xml")
+                os.makedirs(os.path.dirname(twiml_path), exist_ok=True)
+                
+                with open(twiml_path, 'w') as f:
+                    f.write(twiml)
+                
+                # Usar URL local (requiere servidor web)
+                twiml_url = f"http://localhost:8000/temp/{os.path.basename(twiml_path)}"
+            
+            # Realizar llamada a cada destinatario
+            success = True
+            for recipient in recipients:
+                try:
+                    call = client.calls.create(
+                        to=recipient,
+                        from_=self.call_config['from_number'],
+                        url=twiml_url,
+                        method='GET'
+                    )
+                    logger.info(f"Llamada iniciada a {recipient}: {call.sid}")
+                except Exception as e:
+                    logger.error(f"Error al realizar llamada a {recipient}: {str(e)}")
+                    success = False
+            
+            return success
+            
+        except ImportError:
+            logger.error("No se pudo importar Twilio. Instale con: pip install twilio")
+            return False
+        except Exception as e:
+            logger.error(f"Error al realizar llamada: {str(e)}")
+            # Incrementar contador de fallos
+            if hasattr(self, 'notification_metrics'):
+                self.notification_metrics['failure_count'] += 1
+            return False
+    
+    def _initialize_metrics(self):
+        """Inicializa métricas de notificaciones"""
+        self.notification_metrics = {
+            'sent_count': 0,
+            'suppressed_count': 0,
+            'failure_count': 0,
+            'success_channels': 0,
+            'total_channels': 0,
+            'start_time': datetime.datetime.now()
+        }
+    
+    def get_metrics(self) -> Dict:
+        """
+        Obtiene métricas del sistema de notificaciones
+        
+        Returns:
+            Diccionario con métricas
+        """
+        if not hasattr(self, 'notification_metrics'):
+            self._initialize_metrics()
+        
+        # Calcular métricas adicionales
+        metrics = self.notification_metrics.copy()
+        
+        # Calcular tiempo de actividad
+        uptime = (datetime.datetime.now() - metrics['start_time']).total_seconds()
+        metrics['uptime_seconds'] = uptime
+        metrics['uptime_formatted'] = str(datetime.timedelta(seconds=int(uptime)))
+        
+        # Calcular tasa de éxito
+        if metrics['total_channels'] > 0:
+            metrics['success_rate'] = (metrics['success_channels'] / metrics['total_channels']) * 100
+        else:
+            metrics['success_rate'] = 100.0
+        
+        # Calcular tasa de supresión
+        total_attempted = metrics['sent_count'] + metrics['suppressed_count']
+        if total_attempted > 0:
+            metrics['suppression_rate'] = (metrics['suppressed_count'] / total_attempted) * 100
+        else:
+            metrics['suppression_rate'] = 0.0
+        
+        return metrics
+    
+    def reset_metrics(self):
+        """Reinicia las métricas del sistema de notificaciones"""
+        self._initialize_metrics()
+        logger.info("Métricas de notificaciones reiniciadas")
+    
+        def _load_notification_templates(self) -> Dict:
+        """
+        Carga plantillas de notificaciones desde archivo
+        
+        Returns:
+            Diccionario con plantillas de notificaciones
+        """
+        templates_path = os.path.join('config', 'notification_templates.json')
+        
+        if not os.path.exists(templates_path):
+            logger.warning(f"Archivo de plantillas no encontrado: {templates_path}")
+            return {}
+        
+        try:
+            with open(templates_path, 'r', encoding='utf-8') as f:
+                templates = json.load(f)
+            
+            logger.info(f"Cargadas {len(templates)} plantillas de notificaciones")
+            return templates
+        except Exception as e:
+            logger.error(f"Error al cargar plantillas: {str(e)}")
+            return {}
+    
+    def _apply_template(self, template_name: str, data: Dict) -> Dict:
+        """
+        Aplica una plantilla de notificación con datos específicos
+        
+        Args:
+            template_name: Nombre de la plantilla
+            data: Datos para rellenar la plantilla
+            
+        Returns:
+            Diccionario con notificación formateada
+        """
+        if not hasattr(self, 'notification_templates'):
+            self.notification_templates = self._load_notification_templates()
+        
+        if template_name not in self.notification_templates:
+            logger.warning(f"Plantilla no encontrada: {template_name}")
+            return {
+                'subject': f"Notificación sin plantilla: {template_name}",
+                'message': "No se encontró la plantilla para esta notificación.",
+                'level': 'info'
+            }
+        
+        template = self.notification_templates[template_name]
+        
+        # Formatear asunto y mensaje con datos
+        subject = template['subject']
+        message = template['message']
+        
+        # Reemplazar variables en asunto y mensaje
+        for key, value in data.items():
+            placeholder = f"{{{key}}}"
+            if placeholder in subject:
+                subject = subject.replace(placeholder, str(value))
+            if placeholder in message:
+                message = message.replace(placeholder, str(value))
+        
+        return {
+            'subject': subject,
+            'message': message,
+            'level': template.get('level', 'info'),
+            'channels': template.get('channels', None)
+        }
+    
+    def _format_monetization_alert(self, data: Dict) -> Dict:
+        """
+        Formatea alerta específica de monetización
+        
+        Args:
+            data: Datos de monetización
+            
+        Returns:
+            Diccionario con alerta formateada
+        """
+        # Determinar tipo de alerta de monetización
+        alert_type = data.get('alert_type', 'general')
+        
+        # Formatear según tipo
+        if alert_type == 'revenue_drop':
+            return self._apply_template('monetization_revenue_drop', data)
+        elif alert_type == 'opportunity':
+            return self._apply_template('monetization_opportunity', data)
+        elif alert_type == 'threshold':
+            return self._apply_template('monetization_threshold', data)
+        elif alert_type == 'affiliate_performance':
+            return self._apply_template('monetization_affiliate', data)
+        else:
+            return self._apply_template('monetization_general', data)
+    
+    def _format_content_alert(self, data: Dict) -> Dict:
+        """
+        Formatea alerta específica de contenido
+        
+        Args:
+            data: Datos de contenido
+            
+        Returns:
+            Diccionario con alerta formateada
+        """
+        # Determinar tipo de alerta de contenido
+        alert_type = data.get('alert_type', 'general')
+        
+        # Formatear según tipo
+        if alert_type == 'shadowban':
+            return self._apply_template('content_shadowban', data)
+        elif alert_type == 'distribution':
+            return self._apply_template('content_distribution', data)
+        elif alert_type == 'engagement':
+            return self._apply_template('content_engagement', data)
+        elif alert_type == 'viral_potential':
+            return self._apply_template('content_viral', data)
+        else:
+            return self._apply_template('content_general', data)
+    
+    def _format_system_alert(self, data: Dict) -> Dict:
+        """
+        Formatea alerta específica del sistema
+        
+        Args:
+            data: Datos del sistema
+            
+        Returns:
+            Diccionario con alerta formateada
+        """
+        # Determinar tipo de alerta del sistema
+        alert_type = data.get('alert_type', 'general')
+        
+        # Formatear según tipo
+        if alert_type == 'api_limit':
+            return self._apply_template('system_api_limit', data)
+        elif alert_type == 'error':
+            return self._apply_template('system_error', data)
+        elif alert_type == 'update':
+            return self._apply_template('system_update', data)
+        elif alert_type == 'security':
+            return self._apply_template('system_security', data)
+        else:
+            return self._apply_template('system_general', data)
+    
+    def _format_task_notification(self, data: Dict) -> Dict:
+        """
+        Formatea notificación de tarea
+        
+        Args:
+            data: Datos de la tarea
+            
+        Returns:
+            Diccionario con notificación formateada
+        """
+        # Determinar estado de la tarea
+        task_status = data.get('status', 'completed')
+        
+        # Formatear según estado
+        if task_status == 'completed':
+            return self._apply_template('task_completed', data)
+        elif task_status == 'failed':
+            return self._apply_template('task_failed', data)
+        elif task_status == 'started':
+            return self._apply_template('task_started', data)
+        elif task_status == 'progress':
+            return self._apply_template('task_progress', data)
+        else:
+            return self._apply_template('task_general', data)
+    
+    def _format_audience_notification(self, data: Dict) -> Dict:
+        """
+        Formatea notificación de audiencia
+        
+        Args:
+            data: Datos de audiencia
+            
+        Returns:
+            Diccionario con notificación formateada
+        """
+        # Determinar tipo de notificación de audiencia
+        notification_type = data.get('notification_type', 'general')
+        
+        # Formatear según tipo
+        if notification_type == 'milestone':
+            return self._apply_template('audience_milestone', data)
+        elif notification_type == 'growth':
+            return self._apply_template('audience_growth', data)
+        elif notification_type == 'engagement':
+            return self._apply_template('audience_engagement', data)
+        elif notification_type == 'demographic':
+            return self._apply_template('audience_demographic', data)
+        else:
+            return self._apply_template('audience_general', data)
+    
+    def _send_batch_notifications(self, notifications: List[Dict]):
+        """
+        Envía un lote de notificaciones agrupadas
+        
+        Args:
+            notifications: Lista de notificaciones a enviar
+        """
+        if not notifications:
+            return
+        
+        # Agrupar notificaciones inteligentemente
+        grouped = self._group_notifications_intelligently(notifications)
+        
+        # Enviar cada grupo
+        for group in grouped:
+            if len(group) == 1:
+                # Si solo hay una notificación, enviarla normalmente
+                self.send_notification(
+                    notification_type=group[0]['type'],
+                    subject=group[0]['subject'],
+                    message=group[0]['message'],
+                    data=group[0]['data'],
+                    level=group[0]['level'],
+                    user_id=group[0].get('user_id')
+                )
+            else:
+                # Si hay múltiples, crear una notificación agrupada
+                self._send_grouped_notification(group)
+    
+    def _send_grouped_notification(self, notifications: List[Dict]):
+        """
+        Envía una notificación agrupada
+        
+        Args:
+            notifications: Lista de notificaciones a agrupar
+        """
+        # Determinar nivel más alto
+        highest_level = 'info'
+        for notif in notifications:
+            if self.alert_levels_config[notif['level']]['priority'] > self.alert_levels_config[highest_level]['priority']:
+                highest_level = notif['level']
+        
+        # Crear asunto agrupado
+        subject = f"Resumen de {len(notifications)} notificaciones"
+        
+        # Crear mensaje agrupado
+        message = f"Se han recibido {len(notifications)} notificaciones:\n\n"
+        
+        for i, notif in enumerate(notifications, 1):
+            message += f"{i}. [{notif['level'].upper()}] {notif['subject']}\n"
+            message += f"   {notif['message']}\n\n"
+        
+        # Crear datos agrupados
+        data = {
+            'grouped': True,
+            'count': len(notifications),
+            'notification_ids': [n['id'] for n in notifications],
+            'types': [n['type'] for n in notifications]
+        }
+        
+        # Enviar notificación agrupada
+        self.send_notification(
+            notification_type='grouped',
+            subject=subject,
+            message=message,
+            data=data,
+            level=highest_level
+        )
+    
+    def _schedule_escalation(self, notification: Dict):
+        """
+        Programa la escalación de una notificación
+        
+        Args:
+            notification: Notificación a escalar
+        """
+        # Verificar si el nivel permite escalado
+        level = notification['level']
+        if level not in self.alert_levels_config or level == 'critical':
+            return
+        
+        # Obtener configuración de escalado
+        escalation_config = self.alert_levels_config[level].get('escalation')
+        if not escalation_config or not escalation_config.get('enabled', False):
+            return
+        
+        # Determinar tiempo de espera
+        delay = escalation_config.get('delay', 3600)  # 1 hora por defecto
+        
+        # Programar escalado
+        threading.Timer(
+            delay,
+            self._check_and_escalate,
+            args=[notification['id']]
+        ).start()
+        
+        logger.info(f"Escalado programado para notificación {notification['id']} en {delay} segundos")
+    
+    def _check_and_escalate(self, notification_id: str):
+        """
+        Verifica si una notificación debe escalarse
+        
+        Args:
+            notification_id: ID de la notificación
+        """
+        # Buscar notificación en historial
+        notification = None
+        for notif in self.notification_history:
+            if notif['id'] == notification_id:
+                notification = notif
+                break
+        
+        if not notification:
+            logger.warning(f"Notificación {notification_id} no encontrada para escalado")
+            return
+        
+        # Verificar si ya fue resuelta
+        if notification.get('resolved', False):
+            logger.info(f"Notificación {notification_id} ya resuelta, no se escala")
+            return
+        
+        # Verificar si ya fue escalada
+        if notification.get('escalation_status') == 'escalated':
+            logger.info(f"Notificación {notification_id} ya escalada")
+            return
+        
+        # Escalar notificación
+        self._escalate_alert(notification)
+    
+    def mark_as_resolved(self, notification_id: str, resolution_note: str = None) -> bool:
+        """
+        Marca una notificación como resuelta
+        
+        Args:
+            notification_id: ID de la notificación
+            resolution_note: Nota opcional sobre la resolución
+            
+        Returns:
+            True si se marcó correctamente, False en caso contrario
+        """
+        # Buscar notificación en historial
+        for notif in self.notification_history:
+            if notif['id'] == notification_id:
+                notif['resolved'] = True
+                notif['resolution_time'] = datetime.datetime.now().isoformat()
+                if resolution_note:
+                    notif['resolution_note'] = resolution_note
+                
+                logger.info(f"Notificación {notification_id} marcada como resuelta")
+                return True
+        
+        logger.warning(f"Notificación {notification_id} no encontrada para marcar como resuelta")
+        return False
+    
+    def get_active_notifications(self, level: str = None, user_id: str = None) -> List[Dict]:
+        """
+        Obtiene notificaciones activas (no resueltas)
+        
+        Args:
+            level: Filtrar por nivel (opcional)
+            user_id: Filtrar por usuario (opcional)
+            
+        Returns:
+            Lista de notificaciones activas
+        """
+        active = []
+        
+        for notif in self.notification_history:
+            if notif.get('resolved', False):
+                continue
+            
+            if level and notif['level'] != level:
+                continue
+            
+            if user_id and notif.get('user_id') != user_id:
+                continue
+            
+            active.append(notif)
+        
+        return active
+    
+    def get_notification_by_id(self, notification_id: str) -> Optional[Dict]:
+        """
+        Obtiene una notificación por su ID
+        
+        Args:
+            notification_id: ID de la notificación
+            
+        Returns:
+            Notificación o None si no se encuentra
+        """
+        for notif in self.notification_history:
+            if notif['id'] == notification_id:
+                return notif
+        
+        return None
+    
+    def get_notification_history(self, limit: int = 100, 
+                               level: str = None, 
+                               user_id: str = None,
+                               type_filter: str = None,
+                               resolved: bool = None) -> List[Dict]:
+        """
+        Obtiene historial de notificaciones con filtros
+        
+        Args:
+            limit: Número máximo de notificaciones a devolver
+            level: Filtrar por nivel (opcional)
+            user_id: Filtrar por usuario (opcional)
+            type_filter: Filtrar por tipo (opcional)
+            resolved: Filtrar por estado de resolución (opcional)
+            
+        Returns:
+            Lista de notificaciones filtradas
+        """
+        filtered = []
+        
+        for notif in self.notification_history:
+            if level and notif['level'] != level:
+                continue
+            
+            if user_id and notif.get('user_id') != user_id:
+                continue
+            
+            if type_filter and notif['type'] != type_filter:
+                continue
+            
+            if resolved is not None and notif.get('resolved', False) != resolved:
+                continue
+            
+            filtered.append(notif)
+        
+        # Ordenar por fecha (más recientes primero)
+        filtered.sort(
+            key=lambda n: datetime.datetime.fromisoformat(n['timestamp']).timestamp(),
+            reverse=True
+        )
+        
+        # Limitar resultados
+        return filtered[:limit]
+    
+    def clear_notification_history(self, days_old: int = 30) -> int:
+        """
+        Limpia notificaciones antiguas del historial
+        
+        Args:
+            days_old: Eliminar notificaciones más antiguas que estos días
+            
+        Returns:
+            Número de notificaciones eliminadas
+        """
+        if not self.notification_history:
+            return 0
+        
+        current_time = datetime.datetime.now().timestamp()
+        cutoff_time = current_time - (days_old * 86400)  # días a segundos
+        
+        original_count = len(self.notification_history)
+        
+        # Filtrar notificaciones más recientes que el límite
+        self.notification_history = [
+            notif for notif in self.notification_history
+            if datetime.datetime.fromisoformat(notif['timestamp']).timestamp() > cutoff_time
+        ]
+        
+        removed_count = original_count - len(self.notification_history)
+        logger.info(f"Eliminadas {removed_count} notificaciones antiguas del historial")
+        
+        return removed_count
+    
+    def save_notification_history(self) -> bool:
+        """
+        Guarda historial de notificaciones en archivo
+        
+        Returns:
+            True si se guardó correctamente, False en caso contrario
+        """
+        history_path = os.path.join('data', 'notification_history.json')
+        
+        try:
+            # Crear directorio si no existe
+            os.makedirs(os.path.dirname(history_path), exist_ok=True)
+            
+            with open(history_path, 'w', encoding='utf-8') as f:
+                json.dump(self.notification_history, f, indent=2)
+            
+            logger.info(f"Historial de notificaciones guardado: {len(self.notification_history)} entradas")
+            return True
+        except Exception as e:
+            logger.error(f"Error al guardar historial de notificaciones: {str(e)}")
+            return False
+    
+    def load_notification_history(self) -> bool:
+        """
+        Carga historial de notificaciones desde archivo
+        
+        Returns:
+            True si se cargó correctamente, False en caso contrario
+        """
+        history_path = os.path.join('data', 'notification_history.json')
+        
+        if not os.path.exists(history_path):
+            logger.info("No existe archivo de historial de notificaciones")
+            return False
+        
+        try:
+            with open(history_path, 'r', encoding='utf-8') as f:
+                self.notification_history = json.load(f)
+            
+            logger.info(f"Historial de notificaciones cargado: {len(self.notification_history)} entradas")
+            return True
+        except Exception as e:
+            logger.error(f"Error al cargar historial de notificaciones: {str(e)}")
+            self.notification_history = []
+            return False
+    
+    def send_monetization_alert(self, alert_data: Dict, level: str = 'warning', user_id: str = None) -> str:
+        """
+        Envía alerta específica de monetización
+        
+        Args:
+            alert_data: Datos de la alerta de monetización
+            level: Nivel de alerta
+            user_id: ID del usuario destinatario
+            
+        Returns:
+            ID de la notificación enviada
+        """
+        # Formatear alerta
+        formatted = self._format_monetization_alert(alert_data)
+        
+        # Usar nivel de plantilla si no se especifica
+        if level == 'warning' and 'level' in formatted:
+            level = formatted['level']
+        
+        # Enviar notificación
+        return self.send_notification(
+            notification_type='monetization_alert',
+            subject=formatted['subject'],
+            message=formatted['message'],
+            data=alert_data,
+            level=level,
+            channels=formatted.get('channels'),
+            user_id=user_id
+        )
+    
+    def send_content_alert(self, alert_data: Dict, level: str = 'warning', user_id: str = None) -> str:
+        """
+        Envía alerta específica de contenido
+        
+        Args:
+            alert_data: Datos de la alerta de contenido
+            level: Nivel de alerta
+            user_id: ID del usuario destinatario
+            
+        Returns:
+            ID de la notificación enviada
+        """
+        # Formatear alerta
+        formatted = self._format_content_alert(alert_data)
+        
+        # Usar nivel de plantilla si no se especifica
+        if level == 'warning' and 'level' in formatted:
+            level = formatted['level']
+        
+        # Enviar notificación
+        return self.send_notification(
+            notification_type='content_alert',
+            subject=formatted['subject'],
+            message=formatted['message'],
+            data=alert_data,
+            level=level,
+            channels=formatted.get('channels'),
+            user_id=user_id
+        )
+    
+    def send_system_alert(self, alert_data: Dict, level: str = 'warning', user_id: str = None) -> str:
+        """
+        Envía alerta específica del sistema
+        
+        Args:
+            alert_data: Datos de la alerta del sistema
+            level: Nivel de alerta
+            user_id: ID del usuario destinatario
+            
+        Returns:
+            ID de la notificación enviada
+        """
+        # Formatear alerta
+        formatted = self._format_system_alert(alert_data)
+        
+        # Usar nivel de plantilla si no se especifica
+        if level == 'warning' and 'level' in formatted:
+            level = formatted['level']
+        
+        # Enviar notificación
+        return self.send_notification(
+            notification_type='system_alert',
+            subject=formatted['subject'],
+            message=formatted['message'],
+            data=alert_data,
+            level=level,
+            channels=formatted.get('channels'),
+            user_id=user_id
+        )
+    
+    def send_task_notification(self, task_data: Dict, level: str = 'info', user_id: str = None) -> str:
+        """
+        Envía notificación de tarea
+        
+        Args:
+            task_data: Datos de la tarea
+            level: Nivel de notificación
+            user_id: ID del usuario destinatario
+            
+        Returns:
+            ID de la notificación enviada
+        """
+        # Formatear notificación
+        formatted = self._format_task_notification(task_data)
+        
+        # Usar nivel de plantilla si no se especifica
+        if level == 'info' and 'level' in formatted:
+            level = formatted['level']
+        
+        # Enviar notificación
+        return self.send_notification(
+            notification_type='task_notification',
+            subject=formatted['subject'],
+            message=formatted['message'],
+            data=task_data,
+            level=level,
+            channels=formatted.get('channels'),
+            user_id=user_id
+        )
+    
+    def send_audience_notification(self, audience_data: Dict, level: str = 'info', user_id: str = None) -> str:
+        """
+        Envía notificación de audiencia
+        
+        Args:
+            audience_data: Datos de audiencia
+            level: Nivel de notificación
+            user_id: ID del usuario destinatario
+            
+        Returns:
+            ID de la notificación enviada
+        """
+        # Formatear notificación
+        formatted = self._format_audience_notification(audience_data)
+        
+        # Usar nivel de plantilla si no se especifica
+        if level == 'info' and 'level' in formatted:
+            level = formatted['level']
+        
+        # Enviar notificación
+        return self.send_notification(
+            notification_type='audience_notification',
+            subject=formatted['subject'],
+            message=formatted['message'],
+            data=audience_data,
+            level=level,
+            channels=formatted.get('channels'),
+            user_id=user_id
+        )
+    
+    def send_shadowban_alert(self, platform: str, content_id: str, 
+                           metrics: Dict, level: str = 'critical', 
+                           user_id: str = None) -> str:
+        """
+        Envía alerta específica de shadowban
+        
+        Args:
+            platform: Plataforma afectada
+            content_id: ID del contenido afectado
+            metrics: Métricas que indican shadowban
+            level: Nivel de alerta
+            user_id: ID del usuario destinatario
+            
+        Returns:
+            ID de la notificación enviada
+        """
+        # Crear datos de alerta
+        alert_data = {
+            'alert_type': 'shadowban',
+            'platform': platform,
+            'content_id': content_id,
+            'metrics': metrics,
+            'detection_time': datetime.datetime.now().isoformat()
+        }
+        
+        # Enviar alerta de contenido
+        return self.send_content_alert(alert_data, level, user_id)
+    
+    def send_revenue_alert(self, platform: str, content_id: str, 
+                         metrics: Dict, threshold: float,
+                         level: str = 'warning', user_id: str = None) -> str:
+        """
+        Envía alerta específica de ingresos
+        
+        Args:
+            platform: Plataforma afectada
+            content_id: ID del contenido afectado
+            metrics: Métricas de ingresos
+            threshold: Umbral que activó la alerta
+            level: Nivel de alerta
+            user_id: ID del usuario destinatario
+            
+        Returns:
+            ID de la notificación enviada
+        """
+        # Crear datos de alerta
+        alert_data = {
+            'alert_type': 'revenue_drop',
+            'platform': platform,
+            'content_id': content_id,
+            'metrics': metrics,
+            'threshold': threshold,
+            'detection_time': datetime.datetime.now().isoformat()
+        }
+        
+        # Enviar alerta de monetización
+        return self.send_monetization_alert(alert_data, level, user_id)
+    
+    def send_api_limit_alert(self, service: str, limit_type: str, 
+                           current: int, max_limit: int,
+                           level: str = 'warning', user_id: str = None) -> str:
+        """
+        Envía alerta específica de límite de API
+        
+        Args:
+            service: Servicio afectado
+            limit_type: Tipo de límite
+            current: Uso actual
+            max_limit: Límite máximo
+            level: Nivel de alerta
+            user_id: ID del usuario destinatario
+            
+        Returns:
+            ID de la notificación enviada
+        """
+        # Determinar nivel según cercanía al límite
+        usage_percent = (current / max_limit) * 100
+        
+        if usage_percent >= 95:
+            level = 'critical'
+        elif usage_percent >= 80:
+            level = 'warning'
+        else:
+            level = 'info'
+        
+        # Crear datos de alerta
+        alert_data = {
+            'alert_type': 'api_limit',
+            'service': service,
+            'limit_type': limit_type,
+            'current_usage': current,
+            'max_limit': max_limit,
+            'usage_percent': usage_percent,
+            'detection_time': datetime.datetime.now().isoformat()
+        }
+        
+        # Enviar alerta del sistema
+        return self.send_system_alert(alert_data, level, user_id)
+    
+    def send_niche_saturation_alert(self, niche: str, metrics: Dict,
+                                  level: str = 'warning', user_id: str = None) -> str:
+        """
+        Envía alerta específica de saturación de nicho
+        
+        Args:
+            niche: Nicho afectado
+            metrics: Métricas de saturación
+            level: Nivel de alerta
+            user_id: ID del usuario destinatario
+            
+        Returns:
+            ID de la notificación enviada
+        """
+        # Crear datos de alerta
+        alert_data = {
+            'alert_type': 'saturation',
+            'niche': niche,
+            'metrics': metrics,
+            'detection_time': datetime.datetime.now().isoformat()
+        }
+        
+        # Enviar alerta de contenido
+        return self.send_content_alert(alert_data, level, user_id)
+    
+    def send_viral_opportunity_alert(self, content_id: str, platform: str,
+                                   metrics: Dict, opportunity_score: float,
+                                   level: str = 'info', user_id: str = None) -> str:
+        """
+        Envía alerta específica de oportunidad viral
+        
+        Args:
+            content_id: ID del contenido
+            platform: Plataforma
+            metrics: Métricas de viralidad
+            opportunity_score: Puntuación de oportunidad
+            level: Nivel de alerta
+            user_id: ID del usuario destinatario
+            
+        Returns:
+            ID de la notificación enviada
+        """
+        # Determinar nivel según puntuación
+        if opportunity_score >= 0.8:
+            level = 'warning'  # Más urgente para no perder la oportunidad
+        
+        # Crear datos de alerta
+        alert_data = {
+            'alert_type': 'viral_potential',
+            'content_id': content_id,
+            'platform': platform,
+            'metrics': metrics,
+            'opportunity_score': opportunity_score,
+            'detection_time': datetime.datetime.now().isoformat()
+        }
+        
+        # Enviar alerta de contenido
+        return self.send_content_alert(alert_data, level, user_id)
+    
+    def send_milestone_notification(self, milestone_type: str, platform: str,
+                                  value: Union[int, float], previous: Union[int, float],
+                                  level: str = 'info', user_id: str = None) -> str:
+        """
+        Envía notificación de hito alcanzado
+        
+        Args:
+            milestone_type: Tipo de hito (seguidores, ingresos, etc.)
+            platform: Plataforma
+            value: Valor actual
+            previous: Valor anterior
+            level: Nivel de notificación
+            user_id: ID del usuario destinatario
+            
+        Returns:
+            ID de la notificación enviada
+        """
+        # Crear datos de notificación
+        notification_data = {
+            'notification_type': 'milestone',
+            'milestone_type': milestone_type,
+            'platform': platform,
+            'value': value,
+            'previous': previous,
+            'growth': value - previous,
+            'growth_percent': ((value - previous) / previous) * 100 if previous > 0 else 100,
+            'timestamp': datetime.datetime.now().isoformat()
+        }
+        
+        # Enviar notificación de audiencia
+        return self.send_audience_notification(notification_data, level, user_id)
+    
+    def update_user_preferences(self, user_id: str, preferences: Dict) -> bool:
+        """
+        Actualiza preferencias de notificación para un usuario
+        
+        Args:
+            user_id: ID del usuario
+            preferences: Preferencias de notificación
+            
+        Returns:
+            True si se actualizó correctamente, False en caso contrario
+        """
+        if not user_id:
+            logger.error("ID de usuario requerido para actualizar preferencias")
+            return False
+        
+        # Inicializar configuración de usuario si no existe
+        if user_id not in self.user_configs:
+            self.user_configs[user_id] = {}
+        
+        # Actualizar preferencias
+        for key, value in preferences.items():
+            self.user_configs[user_id][key] = value
+        
+        logger.info(f"Preferencias actualizadas para usuario {user_id}")
+        
+        # Guardar configuración
+        self._save_user_configs()
+        
+        return True
+    
+    def _save_user_configs(self) -> bool:
+        """
+        Guarda configuraciones de usuario en archivo
+        
+        Returns:
+            True si se guardó correctamente, False en caso contrario
+        """
+                config_path = os.path.join('config', 'user_notification_configs.json')
+        
+        try:
+            # Crear directorio si no existe
+            os.makedirs(os.path.dirname(config_path), exist_ok=True)
+            
+            with open(config_path, 'w', encoding='utf-8') as f:
+                json.dump(self.user_configs, f, indent=2)
+            
+            logger.info(f"Configuraciones de usuario guardadas: {len(self.user_configs)} usuarios")
+            return True
+        except Exception as e:
+            logger.error(f"Error al guardar configuraciones de usuario: {str(e)}")
+            return False
+    
+    def _load_user_configs(self) -> bool:
+        """
+        Carga configuraciones de usuario desde archivo
+        
+        Returns:
+            True si se cargó correctamente, False en caso contrario
+        """
+        config_path = os.path.join('config', 'user_notification_configs.json')
+        
+        if not os.path.exists(config_path):
+            logger.info("No existe archivo de configuraciones de usuario")
+            return False
+        
+        try:
+            with open(config_path, 'r', encoding='utf-8') as f:
+                self.user_configs = json.load(f)
+            
+            logger.info(f"Configuraciones de usuario cargadas: {len(self.user_configs)} usuarios")
+            return True
+        except Exception as e:
+            logger.error(f"Error al cargar configuraciones de usuario: {str(e)}")
+            self.user_configs = {}
+            return False
+    
+    def _escalate_alert(self, notification: Dict):
+        """
+        Escala una alerta a un nivel superior
+        
+        Args:
+            notification: Notificación a escalar
+        """
+        # Determinar nivel actual y siguiente
+        current_level = notification['level']
+        
+        if current_level == 'info':
+            next_level = 'warning'
+        elif current_level == 'warning':
+            next_level = 'critical'
+        else:
+            logger.warning(f"No se puede escalar notificación de nivel {current_level}")
+            return
+        
+        # Actualizar estado de escalado
+        notification['escalation_status'] = 'escalated'
+        notification['escalation_time'] = datetime.datetime.now().isoformat()
+        notification['previous_level'] = current_level
+        notification['level'] = next_level
+        
+        # Crear mensaje de escalado
+        escalation_subject = f"ESCALADO: {notification['subject']}"
+        escalation_message = (
+            f"Esta alerta ha sido escalada de {current_level.upper()} a {next_level.upper()}.\n\n"
+            f"Alerta original: {notification['message']}\n\n"
+            f"Motivo: No se ha resuelto en el tiempo establecido."
+        )
+        
+        # Enviar notificación escalada
+        self.send_notification(
+            notification_type=notification['type'],
+            subject=escalation_subject,
+            message=escalation_message,
+            data=notification['data'],
+            level=next_level,
+            user_id=notification.get('user_id'),
+            related_id=notification['id']
+        )
+        
+        logger.warning(f"Notificación {notification['id']} escalada de {current_level} a {next_level}")
+    
+    def _is_duplicate(self, notification_type: str, subject: str, level: str, user_id: str = None) -> Optional[str]:
+        """
+        Verifica si una notificación es duplicada
+        
+        Args:
+            notification_type: Tipo de notificación
+            subject: Asunto de la notificación
+            level: Nivel de notificación
+            user_id: ID del usuario destinatario
+            
+        Returns:
+            ID de la notificación duplicada o None si no hay duplicado
+        """
+        # Verificar si la supresión de duplicados está habilitada
+        if not self.deduplication_config['enabled']:
+            return None
+        
+        # Obtener ventana de tiempo para duplicados
+        time_window = self.deduplication_config['time_window']
+        current_time = datetime.datetime.now().timestamp()
+        
+        # Buscar duplicados recientes
+        for notif in self.notification_history:
+            # Verificar si es del mismo tipo y nivel
+            if notif['type'] != notification_type or notif['level'] != level:
+                continue
+            
+            # Verificar si es para el mismo usuario
+            if user_id and notif.get('user_id') != user_id:
+                continue
+            
+            # Verificar si el asunto es similar
+            if subject.lower() != notif['subject'].lower():
+                continue
+            
+            # Verificar si está dentro de la ventana de tiempo
+            notif_time = datetime.datetime.fromisoformat(notif['timestamp']).timestamp()
+            if (current_time - notif_time) <= time_window:
+                return notif['id']
+        
+        return None
+    
+    def _format_alert_message(self, alert_type: str, subject: str, message: str, data: Dict) -> tuple:
+        """
+        Formatea mensaje de alerta con información adicional
+        
+        Args:
+            alert_type: Tipo de alerta
+            subject: Asunto original
+            message: Mensaje original
+            data: Datos adicionales
+            
+        Returns:
+            Tupla con (asunto_formateado, mensaje_formateado)
+        """
+        # Formatear asunto según tipo de alerta
+        formatted_subject = f"[{alert_type.upper()}] {subject}"
+        
+        # Formatear mensaje con detalles adicionales
+        formatted_message = message + "\n\n"
+        
+        # Añadir detalles según tipo de alerta
+        if alert_type == 'shadowban':
+            formatted_message += (
+                f"Plataforma: {data.get('platform', 'Desconocida')}\n"
+                f"Contenido: {data.get('content_id', 'Desconocido')}\n"
+                f"Detectado: {data.get('detection_time', datetime.datetime.now().isoformat())}\n\n"
+                f"Métricas anómalas:\n"
+            )
+            
+            # Añadir métricas
+            metrics = data.get('metrics', {})
+            for key, value in metrics.items():
+                formatted_message += f"- {key}: {value}\n"
+                
+        elif alert_type == 'revenue_drop':
+            formatted_message += (
+                f"Plataforma: {data.get('platform', 'Desconocida')}\n"
+                f"Contenido: {data.get('content_id', 'Desconocido')}\n"
+                f"Umbral: {data.get('threshold', 0)}%\n"
+                f"Detectado: {data.get('detection_time', datetime.datetime.now().isoformat())}\n\n"
+                f"Métricas de ingresos:\n"
+            )
+            
+            # Añadir métricas
+            metrics = data.get('metrics', {})
+            for key, value in metrics.items():
+                formatted_message += f"- {key}: {value}\n"
+                
+        elif alert_type == 'saturation':
+            formatted_message += (
+                f"Nicho: {data.get('niche', 'Desconocido')}\n"
+                f"Detectado: {data.get('detection_time', datetime.datetime.now().isoformat())}\n\n"
+                f"Métricas de saturación:\n"
+            )
+            
+            # Añadir métricas
+            metrics = data.get('metrics', {})
+            for key, value in metrics.items():
+                formatted_message += f"- {key}: {value}\n"
+                
+        elif alert_type == 'api_limit':
+            formatted_message += (
+                f"Servicio: {data.get('service', 'Desconocido')}\n"
+                f"Tipo de límite: {data.get('limit_type', 'Desconocido')}\n"
+                f"Uso actual: {data.get('current_usage', 0)}/{data.get('max_limit', 0)} "
+                f"({data.get('usage_percent', 0):.1f}%)\n"
+                f"Detectado: {data.get('detection_time', datetime.datetime.now().isoformat())}\n"
+            )
+            
+        # Añadir recomendaciones si existen
+        if 'recommendations' in data:
+            formatted_message += "\nRecomendaciones:\n"
+            for rec in data['recommendations']:
+                formatted_message += f"- {rec}\n"
+        
+        return formatted_subject, formatted_message
+    
+    def _get_user_channel_config(self, user_id: str, channel: str) -> Dict:
+        """
+        Obtiene configuración de canal para un usuario
+        
+        Args:
+            user_id: ID del usuario
+            channel: Nombre del canal
+            
+        Returns:
+            Configuración del canal para el usuario
+        """
+        # Si no hay ID de usuario, usar configuración global
+        if not user_id:
+            return self.channels_config.get(channel, {})
+        
+        # Obtener configuración de usuario
+        user_config = self.user_configs.get(user_id, {})
+        
+        # Obtener configuración de canal específica del usuario
+        user_channel_config = user_config.get('channels', {}).get(channel)
+        
+        # Si no hay configuración específica, usar global
+        if not user_channel_config:
+            return self.channels_config.get(channel, {})
+        
+        # Combinar configuración global con específica del usuario
+        channel_config = self.channels_config.get(channel, {}).copy()
+        channel_config.update(user_channel_config)
+        
+        return channel_config
+    
+    def _should_send_to_channel(self, user_id: str, channel: str, level: str) -> bool:
+        """
+        Determina si se debe enviar a un canal específico
+        
+        Args:
+            user_id: ID del usuario
+            channel: Nombre del canal
+            level: Nivel de notificación
+            
+        Returns:
+            True si se debe enviar, False en caso contrario
+        """
+        # Obtener configuración de canal
+        channel_config = self._get_user_channel_config(user_id, channel)
+        
+        # Verificar si el canal está habilitado
+        if not channel_config.get('enabled', False):
+            return False
+        
+        # Verificar nivel mínimo para el canal
+        min_level = channel_config.get('min_level', 'info')
+        
+        # Comparar prioridades
+        level_priority = self.alert_levels_config[level]['priority']
+        min_priority = self.alert_levels_config[min_level]['priority']
+        
+        return level_priority >= min_priority
+    
+    def _send_to_email(self, notification: Dict, user_id: str = None):
+        """
+        Envía notificación por correo electrónico
+        
+        Args:
+            notification: Notificación a enviar
+            user_id: ID del usuario destinatario
+        """
+        # Verificar si se debe enviar por email
+        if not self._should_send_to_channel(user_id, 'email', notification['level']):
+            return
+        
+        # Obtener configuración de email
+        email_config = self._get_user_channel_config(user_id, 'email')
+        
+        # Obtener destinatario
+        recipient = None
+        if user_id and 'address' in email_config:
+            recipient = email_config['address']
+        elif 'default_address' in email_config:
+            recipient = email_config['default_address']
+        
+        if not recipient:
+            logger.warning("No se pudo determinar destinatario de email")
+            return
+        
+        try:
+            # Crear mensaje
+            msg = MIMEMultipart()
+            msg['From'] = email_config.get('from_address', 'notificaciones@contentbot.com')
+            msg['To'] = recipient
+            msg['Subject'] = notification['subject']
+            
+            # Añadir cuerpo del mensaje
+            body = notification['message']
+            msg.attach(MIMEText(body, 'plain'))
+            
+            # Conectar al servidor SMTP
+            server = smtplib.SMTP(
+                email_config.get('smtp_server', 'smtp.gmail.com'),
+                email_config.get('smtp_port', 587)
+            )
+            server.starttls()
+            
+            # Iniciar sesión
+            server.login(
+                email_config.get('smtp_username', ''),
+                email_config.get('smtp_password', '')
+            )
+            
+            # Enviar email
+            server.send_message(msg)
+            server.quit()
+            
+            logger.info(f"Email enviado a {recipient}: {notification['subject']}")
+        except Exception as e:
+            logger.error(f"Error al enviar email: {str(e)}")
+    
+    def _send_to_webhook(self, notification: Dict, user_id: str = None):
+        """
+        Envía notificación a webhook
+        
+        Args:
+            notification: Notificación a enviar
+            user_id: ID del usuario destinatario
+        """
+        # Verificar si se debe enviar por webhook
+        if not self._should_send_to_channel(user_id, 'webhook', notification['level']):
+            return
+        
+        # Obtener configuración de webhook
+        webhook_config = self._get_user_channel_config(user_id, 'webhook')
+        
+        # Obtener URL del webhook
+        webhook_url = None
+        if user_id and 'url' in webhook_config:
+            webhook_url = webhook_config['url']
+        elif 'default_url' in webhook_config:
+            webhook_url = webhook_config['default_url']
+        
+        if not webhook_url:
+            logger.warning("No se pudo determinar URL de webhook")
+            return
+        
+        try:
+            # Preparar payload
+            payload = {
+                'id': notification['id'],
+                'type': notification['type'],
+                'subject': notification['subject'],
+                'message': notification['message'],
+                'level': notification['level'],
+                'timestamp': notification['timestamp'],
+                'data': notification['data']
+            }
+            
+            # Añadir usuario si existe
+            if user_id:
+                payload['user_id'] = user_id
+            
+            # Enviar a webhook
+            response = requests.post(
+                webhook_url,
+                json=payload,
+                headers={'Content-Type': 'application/json'},
+                timeout=webhook_config.get('timeout', 5)
+            )
+            
+            # Verificar respuesta
+            if response.status_code >= 200 and response.status_code < 300:
+                logger.info(f"Webhook enviado a {webhook_url}: {notification['subject']}")
+            else:
+                logger.warning(f"Error al enviar webhook: {response.status_code} - {response.text}")
+        except Exception as e:
+            logger.error(f"Error al enviar webhook: {str(e)}")
+    
+    def _send_to_slack(self, notification: Dict, user_id: str = None):
+        """
+        Envía notificación a Slack
+        
+        Args:
+            notification: Notificación a enviar
+            user_id: ID del usuario destinatario
+        """
+        # Verificar si se debe enviar por Slack
+        if not self._should_send_to_channel(user_id, 'slack', notification['level']):
+            return
+        
+        # Obtener configuración de Slack
+        slack_config = self._get_user_channel_config(user_id, 'slack')
+        
+        # Obtener webhook URL de Slack
+        webhook_url = None
+        if user_id and 'webhook_url' in slack_config:
+            webhook_url = slack_config['webhook_url']
+        elif 'default_webhook_url' in slack_config:
+            webhook_url = slack_config['default_webhook_url']
+        
+        if not webhook_url:
+            logger.warning("No se pudo determinar webhook URL de Slack")
+            return
+        
+        try:
+            # Determinar color según nivel
+            color = '#36a64f'  # verde para info
+            if notification['level'] == 'warning':
+                color = '#ffcc00'  # amarillo
+            elif notification['level'] == 'critical':
+                color = '#ff0000'  # rojo
+            
+            # Preparar payload
+            payload = {
+                'attachments': [
+                    {
+                        'fallback': notification['subject'],
+                        'color': color,
+                        'title': notification['subject'],
+                        'text': notification['message'],
+                        'fields': [
+                            {
+                                'title': 'Nivel',
+                                'value': notification['level'].upper(),
+                                'short': True
+                            },
+                            {
+                                'title': 'Tipo',
+                                'value': notification['type'],
+                                'short': True
+                            }
+                        ],
+                        'footer': f"ID: {notification['id']}",
+                        'ts': int(datetime.datetime.fromisoformat(notification['timestamp']).timestamp())
+                    }
+                ]
+            }
+            
+            # Añadir canal específico si existe
+            if 'channel' in slack_config:
+                payload['channel'] = slack_config['channel']
+            
+            # Enviar a Slack
+            response = requests.post(
+                webhook_url,
+                json=payload,
+                headers={'Content-Type': 'application/json'},
+                timeout=slack_config.get('timeout', 5)
+            )
+            
+            # Verificar respuesta
+            if response.status_code == 200:
+                logger.info(f"Slack enviado: {notification['subject']}")
+            else:
+                logger.warning(f"Error al enviar Slack: {response.status_code} - {response.text}")
+        except Exception as e:
+            logger.error(f"Error al enviar Slack: {str(e)}")
+    
+    def _send_to_telegram(self, notification: Dict, user_id: str = None):
+        """
+        Envía notificación a Telegram
+        
+        Args:
+            notification: Notificación a enviar
+            user_id: ID del usuario destinatario
+        """
+        # Verificar si se debe enviar por Telegram
+        if not self._should_send_to_channel(user_id, 'telegram', notification['level']):
+            return
+        
+        # Obtener configuración de Telegram
+        telegram_config = self._get_user_channel_config(user_id, 'telegram')
+        
+        # Obtener token y chat_id
+        token = telegram_config.get('bot_token')
+        chat_id = None
+        
+        if user_id and 'chat_id' in telegram_config:
+            chat_id = telegram_config['chat_id']
+        elif 'default_chat_id' in telegram_config:
+            chat_id = telegram_config['default_chat_id']
+        
+        if not token or not chat_id:
+            logger.warning("Faltan credenciales para Telegram")
+            return
+        
+        try:
+            # Formatear mensaje
+            level_emoji = "ℹ️"
+            if notification['level'] == 'warning':
+                level_emoji = "⚠️"
+            elif notification['level'] == 'critical':
+                level_emoji = "🚨"
+            
+            message = (
+                f"{level_emoji} *{notification['subject']}*\n\n"
+                f"{notification['message']}\n\n"
+                f"*Nivel:* {notification['level'].upper()}\n"
+                f"*Tipo:* {notification['type']}\n"
+                f"*ID:* `{notification['id']}`"
+            )
+            
+            # Enviar a Telegram
+            url = f"https://api.telegram.org/bot{token}/sendMessage"
+            payload = {
+                'chat_id': chat_id,
+                'text': message,
+                'parse_mode': 'Markdown'
+            }
+            
+            response = requests.post(
+                url,
+                json=payload,
+                timeout=telegram_config.get('timeout', 5)
+            )
+            
+            # Verificar respuesta
+            if response.status_code == 200:
+                logger.info(f"Telegram enviado: {notification['subject']}")
+            else:
+                logger.warning(f"Error al enviar Telegram: {response.status_code} - {response.text}")
+        except Exception as e:
+            logger.error(f"Error al enviar Telegram: {str(e)}")
+    
+    def _send_to_desktop(self, notification: Dict, user_id: str = None):
+        """
+        Envía notificación al escritorio
+        
+        Args:
+            notification: Notificación a enviar
+            user_id: ID del usuario destinatario
+        """
+        # Verificar si se debe enviar al escritorio
+        if not self._should_send_to_channel(user_id, 'desktop', notification['level']):
+            return
+        
+        # Obtener configuración de escritorio
+        desktop_config = self._get_user_channel_config(user_id, 'desktop')
+        
+        # Verificar si está habilitado
+        if not desktop_config.get('enabled', False):
+            return
+        
+        try:
+            # Intentar importar módulo de notificaciones
+            import plyer.platforms.win.notification
+            from plyer import notification as plyer_notification
+            
+            # Enviar notificación
+            plyer_notification.notify(
+                title=notification['subject'],
+                message=notification['message'],
+                app_name="ContentBot",
+                timeout=desktop_config.get('timeout', 10)
+            )
+            
+            logger.info(f"Notificación de escritorio enviada: {notification['subject']}")
+        except ImportError:
+            logger.warning("Módulo plyer no encontrado para notificaciones de escritorio")
+        except Exception as e:
+            logger.error(f"Error al enviar notificación de escritorio: {str(e)}")
+    
+    def _send_to_database(self, notification: Dict):
+        """
+        Guarda notificación en base de datos
+        
+        Args:
+            notification: Notificación a guardar
+        """
+        # Añadir a historial
+        self.notification_history.append(notification)
+        
+        # Guardar historial periódicamente
+        self._save_history_if_needed()
+    
+    def _save_history_if_needed(self):
+        """Guarda historial si es necesario según configuración"""
+        # Verificar si está habilitado el guardado automático
+        if not self.history_config.get('auto_save', {}).get('enabled', False):
+            return
+        
+        # Verificar si es momento de guardar
+        current_time = time.time()
+        last_save = getattr(self, '_last_history_save', 0)
+        save_interval = self.history_config.get('auto_save', {}).get('interval', 3600)
+        
+        if (current_time - last_save) >= save_interval:
+            self.save_notification_history()
+            self._last_history_save = current_time
+    
+    def _retry_failed_notifications(self):
+        """Reintenta enviar notificaciones fallidas"""
+        # Verificar si hay notificaciones para reintentar
+        if not hasattr(self, 'failed_notifications'):
+            self.failed_notifications = []
+        
+        if not self.failed_notifications:
+            return
+        
+        # Obtener configuración de reintentos
+        retry_config = self.retry_config
+        max_retries = retry_config.get('max_retries', 3)
+        
+        # Crear copia para iterar mientras modificamos
+        to_retry = self.failed_notifications.copy()
+        self.failed_notifications = []
+        
+        for notif in to_retry:
+            # Verificar si se alcanzó el máximo de reintentos
+            if notif.get('retry_count', 0) >= max_retries:
+                logger.warning(f"Máximo de reintentos alcanzado para notificación {notif['id']}")
+                continue
+            
+            # Incrementar contador de reintentos
+            notif['retry_count'] = notif.get('retry_count', 0) + 1
+            
+            # Reintentar envío
+            logger.info(f"Reintentando envío de notificación {notif['id']} (intento {notif['retry_count']})")
+            
+            try:
+                # Enviar a canales configurados
+                self._send_to_channels(notif, notif.get('user_id'))
+            except Exception as e:
+                logger.error(f"Error al reintentar notificación {notif['id']}: {str(e)}")
+                # Volver a añadir a la lista de fallidos
+                self.failed_notifications.append(notif)
+    
+    def _schedule_retry(self):
+        """Programa reintento de notificaciones fallidas"""
+        # Verificar si los reintentos están habilitados
+        if not self.retry_config.get('enabled', False):
+            return
+        
+        # Obtener intervalo de reintentos
+        retry_interval = self.retry_config.get('interval', 300)  # 5 minutos por defecto
+        
+        # Programar reintento
+        threading.Timer(
+            retry_interval,
+            self._retry_and_reschedule
+        ).start()
+    
+    def _retry_and_reschedule(self):
+        """Reintenta notificaciones y reprograma"""
+        self._retry_failed_notifications()
+        self._schedule_retry()
+    
     def _group_notifications_intelligently(self, notifications: List[Dict]) -> List[List[Dict]]:
-        """Agrupa notificaciones de manera inteligente"""
+        """
+        Agrupa notificaciones de manera inteligente
+        
+        Args:
+            notifications: Lista de notificaciones a agrupar
+            
+        Returns:
+            Lista de grupos de notificaciones
+        """
         if not notifications:
             return []
         
@@ -773,780 +3040,304 @@ class Notifier:
             
             last_time = notif_time
         
+        # Añadir último grupo
         if current_group:
             grouped.append(current_group)
         
-        # Fusionar grupos por tipo si son similares
-        final_groups = []
-        for group in grouped:
-            type_counts = defaultdict(int)
-            for notif in group:
-                type_counts[notif['type']] += 1
-            
-            # Si un tipo domina el grupo, mantenerlo unido
-            dominant_type = max(type_counts.items(), key=lambda x: x[1])[0] if type_counts else None
-            if dominant_type and type_counts[dominant_type] / len(group) >= self.grouping_config['type_similarity_threshold']:
-                final_groups.append(group)
-            else:
-                # Dividir por tipo
-                type_groups = defaultdict(list)
-                for notif in group:
-                    type_groups[notif['type']].append(notif)
-                final_groups.extend(type_groups.values())
-        
-        return [g for g in final_groups if g]
+        return grouped
     
-    def notify_batch(self, notifications: List[Dict]) -> List[str]:
+    def _send_log(self, notification: Dict, level_config: Dict):
         """
-        Envía un lote de notificaciones agrupadas
+        Registra notificación en el log
+        
+        Args:
+            notification: Notificación a registrar
+            level_config: Configuración del nivel de alerta
         """
-        notification_ids = []
+        log_message = f"{level_config['prefix']} {notification['subject']}: {notification['message']}"
+        if notification.get('user_id'):
+            log_message += f" (Usuario: {notification['user_id']})"
         
-        # Agrupar notificaciones inteligentemente
-        grouped_notifications = self._group_notifications_intelligently(notifications)
+        if notification['level'] == 'critical':
+            logger.critical(log_message)
+        elif notification['level'] == 'warning':
+            logger.warning(log_message)
+        else:
+            logger.info(log_message)
+    
+    def get_notification_stats(self, days: int = 7) -> Dict:
+        """
+        Obtiene estadísticas de notificaciones
         
-        for group in grouped_notifications:
-            if not group:
-                continue
+        Args:
+            days: Número de días para las estadísticas
             
-            grouped_message = "📢 Notificaciones Agrupadas\n\n"
-            grouped_data = {}
-            highest_level = 'info'
-            user_id = group[0].get('user_id')
-            
-            # Verificar que todas las notificaciones sean del mismo usuario
-            if not all(notif.get('user_id') == user_id for notif in group):
-                logger.warning("Intento de agrupar notificaciones de diferentes usuarios, enviando individualmente")
-                for notif in group:
-                    notification_id = self.send_notification(
-                        notification_type=notif['type'],
-                        subject=notif['subject'],
-                        message=notif['message'],
-                        data=notif['data'],
-                        level=notif['level'],
-                        user_id=notif['user_id']
-                    )
-                    notification_ids.append(notification_id)
-                continue
-            
-            for idx, notif in enumerate(group):
-                notification_type = notif.get('type', 'batch')
-                subject = notif.get('subject', 'Notificación agrupada')
-                message = notif.get('message', '')
-                data = notif.get('data', {})
-                level = notif.get('level', 'info')
-                
-                if self.alert_levels_config[level]['priority'] < self.alert_levels_config[highest_level]['priority']:
-                    highest_level = level
-                
-                grouped_message += f"[{idx + 1}] {self.alert_levels_config[level]['prefix']} {subject}\n"
-                grouped_message += f"{message}\n\n"
-                grouped_data[f"notification_{idx + 1}"] = {
-                    'type': notification_type,
-                    'subject': subject,
-                    'message': message,
-                    'data': data,
-                    'level': level
+        Returns:
+            Diccionario con estadísticas
+        """
+        stats = {
+            'total': 0,
+            'by_level': {
+                'info': 0,
+                'warning': 0,
+                'critical': 0
+            },
+            'by_type': {},
+            'by_day': {},
+            'resolution_time': {
+                'average': 0,
+                'by_level': {
+                    'info': 0,
+                    'warning': 0,
+                    'critical': 0
                 }
-            
-            notification_id = self.send_notification(
-                notification_type="batch_notification",
-                subject="Notificaciones Agrupadas",
-                message=grouped_message,
-                data=grouped_data,
-                level=highest_level,
-                user_id=user_id
-            )
-            
-            notification_ids.append(notification_id)
-            self.notification_metrics['grouped_notifications'] += len(group)
-        
-        return notification_ids
-    
-    def notify_shadowban(self, platform: str, channel_id: str, metrics: Dict, user_id: str = None):
-        """
-        Envía notificación de posible shadowban
-        """
-        threshold = self.alerts_config.get('risk', {}).get('shadowban_probability', 0.7)
-        if user_id and user_id in self.user_configs:
-            threshold = self.user_configs[user_id].get('alert_preferences', {}).get('shadowban_threshold', threshold)
-        
-        views_drop = metrics.get('views_drop', 0)
-        engagement_drop = metrics.get('engagement_drop', 0)
-        distribution_change = metrics.get('distribution_change', 0)
-        
-        shadowban_probability = (views_drop + engagement_drop + distribution_change) / 3
-        
-        if shadowban_probability >= threshold:
-            subject = f"Posible shadowban detectado en {platform}"
-            message = (
-                f"Se ha detectado una posible restricción de distribución (shadowban) "
-                f"en el canal {channel_id} de {platform}.\n\n"
-                f"Probabilidad estimada: {shadowban_probability:.2%}"
-            )
-            
-            self.send_notification(
-                notification_type="shadowban",
-                subject=subject,
-                message=message,
-                data={
-                    'platform': platform,
-                    'channel_id': channel_id,
-                    'views_drop': f"{views_drop:.2%}",
-                    'engagement_drop': f"{engagement_drop:.2%}",
-                    'distribution_change': f"{distribution_change:.2%}",
-                    'probability': f"{shadowban_probability:.2%}"
-                },
-                level='warning',
-                user_id=user_id
-            )
-    
-    def notify_niche_saturation(self, niche: str, metrics: Dict, user_id: str = None):
-        """
-        Envía notificación de saturación de nicho
-        """
-        saturation_config = self.strategy.get('optimization_strategies', {}).get('niche_saturation', {})
-        
-        view_decline = metrics.get('view_decline_rate', 0)
-        engagement_decline = metrics.get('engagement_decline_rate', 0)
-        competition_increase = metrics.get('competition_increase_rate', 0)
-        
-        thresholds = saturation_config.get('metrics', {
-            'view_decline_rate': 0.2,
-            'engagement_decline_rate': 0.15,
-            'competition_increase_rate': 0.3
-        })
-        if user_id and user_id in self.user_configs:
-            user_thresholds = self.user_configs[user_id].get('alert_preferences', {}).get('niche_saturation', {})
-            thresholds.update(user_thresholds)
-        
-        threshold_exceeded = (
-            view_decline > thresholds.get('view_decline_rate', 0.2) or
-            engagement_decline > thresholds.get('engagement_decline_rate', 0.15) or
-            competition_increase > thresholds.get('competition_increase_rate', 0.3)
-        )
-        
-        if threshold_exceeded:
-            subject = f"Saturación detectada en nicho: {niche}"
-            message = (
-                f"Se ha detectado una posible saturación en el nicho {niche}.\n\n"
-                f"Las métricas indican un aumento de competencia y/o disminución de rendimiento."
-            )
-            
-            self.send_notification(
-                notification_type="niche_saturation",
-                subject=subject,
-                message=message,
-                data={
-                    'niche': niche,
-                    'view_decline': f"{view_decline:.2%}",
-                    'engagement_decline': f"{engagement_decline:.2%}",
-                    'competition_increase': f"{competition_increase:.2%}"
-                },
-                level='info',
-                user_id=user_id
-            )
-            
-            if saturation_config.get('actions', {}).get('suggest_pivot', False):
-                self._suggest_niche_pivot(niche, user_id)
-    
-    def _suggest_niche_pivot(self, current_niche: str, user_id: str = None):
-        """Sugiere nichos alternativos basados en tendencias actuales"""
-        alternative_niches = {
-            'finance': ['technology', 'health'],
-            'health': ['finance', 'humor'],
-            'gaming': ['technology', 'humor'],
-            'technology': ['finance', 'gaming'],
-            'humor': ['gaming', 'health']
-        }
-        
-        suggestions = alternative_niches.get(current_niche, [])
-        
-        if suggestions:
-            subject = f"Sugerencia de pivote para nicho {current_niche}"
-            message = (
-                f"Basado en la saturación detectada en el nicho {current_niche}, "
-                f"se recomienda considerar un pivote hacia los siguientes nichos:\n\n"
-                f"- {suggestions[0]}\n"
-                f"- {suggestions[1]}\n\n"
-                f"Estos nichos muestran mejor potencial de crecimiento y menor saturación."
-            )
-            
-            self.send_notification(
-                notification_type="niche_pivot",
-                subject=subject,
-                message=message,
-                data={
-                    'current_niche': current_niche,
-                    'suggested_niches': suggestions
-                },
-                level='info',
-                user_id=user_id
-            )
-    
-    def notify_performance_drop(self, channel_id: str, platform: str, metrics: Dict, user_id: str = None):
-        """
-        Envía notificación de caída de rendimiento
-        """
-        thresholds = self.alerts_config.get('performance_drop', {
-            'views': 0.3,
-            'engagement': 0.25,
-            'conversion': 0.2
-        })
-        if user_id and user_id in self.user_configs:
-            user_thresholds = self.user_configs[user_id].get('alert_preferences', {}).get('performance_drop', {})
-            thresholds.update(user_thresholds)
-        
-        alerts = []
-        if metrics.get('views_drop', 0) > thresholds.get('views', 0.3):
-            alerts.append(f"Caída de vistas: {metrics['views_drop']:.2%}")
-        
-        if metrics.get('engagement_drop', 0) > thresholds.get('engagement', 0.25):
-            alerts.append(f"Caída de engagement: {metrics['engagement_drop']:.2%}")
-        
-        if metrics.get('conversion_drop', 0) > thresholds.get('conversion', 0.2):
-            alerts.append(f"Caída de conversión: {metrics['conversion_drop']:.2%}")
-        
-        if alerts:
-            subject = f"Caída de rendimiento en {platform}"
-            message = (
-                f"Se ha detectado una caída significativa en el rendimiento "
-                f"del canal {channel_id} en {platform}:\n\n"
-                f"- {alerts[0]}\n"
-            )
-            
-            if len(alerts) > 1:
-                for alert in alerts[1:]:
-                    message += f"- {alert}\n"
-            
-            max_drop = max(
-                metrics.get('views_drop', 0),
-                metrics.get('engagement_drop', 0),
-                metrics.get('conversion_drop', 0)
-            )
-            
-            level = 'warning' if max_drop > 0.5 else 'info'
-            
-            self.send_notification(
-                notification_type="performance_drop",
-                subject=subject,
-                message=message,
-                data={
-                    'channel_id': channel_id,
-                    'platform': platform,
-                    **{k: f"{v:.2%}" for k, v in metrics.items() if k.endswith('_drop')}
-                },
-                level=level,
-                user_id=user_id
-            )
-    
-    def notify_opportunity(self, opportunity_type: str, data: Dict, user_id: str = None):
-        """
-        Envía notificación de oportunidad detectada
-        """
-        opportunity_messages = {
-            'trending_topic': {
-                'subject': 'Tema tendencia detectado',
-                'message': 'Se ha detectado un tema en tendencia que podría ser relevante para tu contenido.',
-                'level': 'info'
-            },
-            'audience_growth': {
-                'subject': 'Oportunidad de crecimiento de audiencia',
-                'message': 'Se ha detectado un segmento de audiencia con alto potencial de crecimiento.',
-                'level': 'info'
-            },
-            'monetization': {
-                'subject': 'Oportunidad de monetización',
-                'message': 'Se ha detectado una nueva oportunidad para monetizar tu contenido.',
-                'level': 'warning'
-            },
-            'collaboration': {
-                'subject': 'Oportunidad de colaboración',
-                'message': 'Se ha identificado un creador potencial para colaboración.',
-                'level': 'info'
-            },
-            'platform_feature': {
-                'subject': 'Nueva característica de plataforma',
-                'message': 'Se ha lanzado una nueva característica que podría beneficiar a tu canal.',
-                'level': 'info'
-            },
-            'content_gap': {
-                'subject': 'Brecha de contenido identificada',
-                'message': 'Se ha identificado una brecha de contenido que podrías aprovechar.',
-                'level': 'info'
             }
         }
         
-        config = opportunity_messages.get(opportunity_type, {
-            'subject': f'Nueva oportunidad: {opportunity_type}',
-            'message': 'Se ha detectado una nueva oportunidad para tu contenido.',
-            'level': 'info'
-        })
+        # Calcular fecha límite
+        cutoff_time = (datetime.datetime.now() - datetime.timedelta(days=days)).timestamp()
         
-        subject = config['subject']
-        message = config['message'] + '\n\n'
+        # Contadores para tiempo de resolución
+        resolution_times = {
+            'info': [],
+            'warning': [],
+            'critical': []
+        }
         
-        if opportunity_type == 'trending_topic':
-            message += (
-                f"Tema: {data.get('topic', 'No especificado')}\n"
-                f"Volumen de búsqueda: {data.get('search_volume', 'No disponible')}\n"
-                f"Crecimiento: {data.get('growth_rate', '0')}%\n\n"
-                f"Este tema está ganando popularidad y se alinea con tu contenido. "
-                f"Considera crear contenido relacionado pronto para aprovechar esta tendencia."
-            )
+        # Procesar notificaciones
+        for notif in self.notification_history:
+            # Verificar si está dentro del rango de tiempo
+            notif_time = datetime.datetime.fromisoformat(notif['timestamp']).timestamp()
+            if notif_time < cutoff_time:
+                continue
+            
+            # Incrementar contador total
+            stats['total'] += 1
+            
+            # Incrementar contador por nivel
+            level = notif['level']
+            stats['by_level'][level] += 1
+            
+            # Incrementar contador por tipo
+            notif_type = notif['type']
+            if notif_type not in stats['by_type']:
+                stats['by_type'][notif_type] = 0
+            stats['by_type'][notif_type] += 1
+            
+            # Incrementar contador por día
+            day = datetime.datetime.fromtimestamp(notif_time).strftime('%Y-%m-%d')
+            if day not in stats['by_day']:
+                stats['by_day'][day] = 0
+            stats['by_day'][day] += 1
+            
+            # Calcular tiempo de resolución si está resuelto
+            if notif.get('resolved', False) and 'resolution_time' in notif:
+                resolution_time = (
+                    datetime.datetime.fromisoformat(notif['resolution_time']).timestamp() - notif_time
+                )
+                resolution_times[level].append(resolution_time)
         
-        elif opportunity_type == 'audience_growth':
-            message += (
-                f"Segmento: {data.get('segment', 'No especificado')}\n"
-                f"Tamaño estimado: {data.get('estimated_size', 'No disponible')}\n"
-                f"Tasa de crecimiento: {data.get('growth_rate', '0')}%\n\n"
-                f"Este segmento de audiencia está creciendo rápidamente y muestra interés "
-                f"en temas relacionados con tu contenido. Considera adaptar tu estrategia "
-                f"para atraer a este público."
-            )
+        # Calcular tiempos promedio de resolución
+        total_resolution_time = 0
+        total_resolved = 0
         
-        elif opportunity_type == 'monetization':
-            message += (
-                f"Tipo: {data.get('type', 'No especificado')}\n"
-                f"Potencial estimado: {data.get('estimated_revenue', 'No disponible')}\n\n"
-                f"Esta oportunidad de monetización podría aumentar tus ingresos. "
-                f"Revisa los detalles y considera implementarla en tu estrategia."
-            )
+        for level, times in resolution_times.items():
+            if times:
+                avg_time = sum(times) / len(times)
+                stats['resolution_time']['by_level'][level] = avg_time
+                total_resolution_time += sum(times)
+                total_resolved += len(times)
         
-        elif opportunity_type == 'collaboration':
-            message += (
-                f"Creador: {data.get('creator_name', 'No especificado')}\n"
-                f"Plataforma: {data.get('platform', 'No disponible')}\n"
-                f"Audiencia: {data.get('audience_size', 'No disponible')}\n\n"
-                f"Este creador tiene una audiencia similar y complementaria a la tuya. "
-                f"Una colaboración podría beneficiar a ambos canales."
-            )
+        if total_resolved > 0:
+            stats['resolution_time']['average'] = total_resolution_time / total_resolved
         
-        elif opportunity_type == 'platform_feature':
-            message += (
-                f"Plataforma: {data.get('platform', 'No especificado')}\n"
-                f"Característica: {data.get('feature_name', 'No disponible')}\n\n"
-                f"Esta nueva característica podría ayudarte a mejorar tu alcance o monetización. "
-                f"Considera cómo integrarla en tu estrategia de contenido."
-            )
+        return stats
+    
+        def send_notification_stats(self, days: int = 7, user_id: str = None) -> str:
+        """
+        Envía estadísticas de notificaciones como notificación
         
-        elif opportunity_type == 'content_gap':
-            message += (
-                f"Tema: {data.get('topic', 'No especificado')}\n"
-                f"Demanda estimada: {data.get('demand_level', 'No disponible')}\n"
-                f"Competencia: {data.get('competition_level', 'No disponible')}\n\n"
-                f"Existe una demanda significativa para este tema con poca oferta de contenido. "
-                f"Considera crear contenido para cubrir esta brecha."
-            )
+        Args:
+            days: Número de días para las estadísticas
+            user_id: ID del usuario destinatario
+            
+        Returns:
+            ID de la notificación enviada
+        """
+        # Obtener estadísticas
+        stats = self.get_notification_stats(days)
         
-        self.send_notification(
-            notification_type=f"opportunity_{opportunity_type}",
+        # Crear asunto
+        subject = f"Resumen de notificaciones ({days} días)"
+        
+        # Crear mensaje
+        message = f"Resumen de notificaciones de los últimos {days} días:\n\n"
+        
+        # Añadir total
+        message += f"Total de notificaciones: {stats['total']}\n\n"
+        
+        # Añadir por nivel
+        message += "Por nivel:\n"
+        for level, count in stats['by_level'].items():
+            percentage = (count / stats['total'] * 100) if stats['total'] > 0 else 0
+            message += f"- {level.upper()}: {count} ({percentage:.1f}%)\n"
+        
+        message += "\nPor tipo:\n"
+        for notif_type, count in sorted(stats['by_type'].items(), key=lambda x: x[1], reverse=True):
+            percentage = (count / stats['total'] * 100) if stats['total'] > 0 else 0
+            message += f"- {notif_type}: {count} ({percentage:.1f}%)\n"
+        
+        # Añadir tiempo de resolución
+        if stats['resolution_time']['average'] > 0:
+            avg_time = stats['resolution_time']['average']
+            hours = int(avg_time / 3600)
+            minutes = int((avg_time % 3600) / 60)
+            
+            message += f"\nTiempo promedio de resolución: {hours}h {minutes}m\n"
+            message += "Por nivel:\n"
+            
+            for level, time_avg in stats['resolution_time']['by_level'].items():
+                if time_avg > 0:
+                    hours = int(time_avg / 3600)
+                    minutes = int((time_avg % 3600) / 60)
+                    message += f"- {level.upper()}: {hours}h {minutes}m\n"
+        
+        # Añadir tendencia por día
+        message += "\nTendencia diaria:\n"
+        for day, count in sorted(stats['by_day'].items()):
+            message += f"- {day}: {count}\n"
+        
+        # Enviar notificación
+        return self.send_notification(
+            notification_type='stats',
             subject=subject,
             message=message,
-            data=data,
-            level=config['level'],
+            data=stats,
+            level='info',
             user_id=user_id
         )
     
-    def notify_task_completion(self, task_type: str, task_data: Dict, success: bool = True, user_id: str = None):
+    def send_system_alert(self, alert_data: Dict, level: str = 'warning', user_id: str = None) -> str:
         """
-        Envía notificación de finalización de tarea
+        Envía alerta del sistema
+        
+        Args:
+            alert_data: Datos de la alerta
+            level: Nivel de alerta
+            user_id: ID del usuario destinatario
+            
+        Returns:
+            ID de la notificación enviada
         """
-        task_messages = {
-            'content_creation': 'Creación de contenido',
-            'content_optimization': 'Optimización de contenido',
-            'analytics_report': 'Informe de análisis',
-            'audience_research': 'Investigación de audiencia',
-            'competitor_analysis': 'Análisis de competencia',
-            'trend_research': 'Investigación de tendencias',
-            'monetization_setup': 'Configuración de monetización',
-            'engagement_campaign': 'Campaña de engagement',
-            'data_backup': 'Respaldo de datos'
-        }
+        # Extraer tipo de alerta
+        alert_type = alert_data.get('alert_type', 'system')
         
-        task_name = task_messages.get(task_type, f'Tarea: {task_type}')
-        
-        if success:
-            subject = f"✅ {task_name} completada"
-            message = f"La tarea de {task_name.lower()} se ha completado con éxito."
-            level = 'info'
+        # Crear asunto según tipo
+        if alert_type == 'api_limit':
+            subject = f"Límite de API cercano: {alert_data.get('service')}"
+        elif alert_type == 'error':
+            subject = f"Error del sistema: {alert_data.get('error_type', 'Desconocido')}"
+        elif alert_type == 'performance':
+            subject = f"Problema de rendimiento: {alert_data.get('component', 'Sistema')}"
         else:
-            subject = f"❌ {task_name} fallida"
-            message = f"La tarea de {task_name.lower()} ha fallado."
-            level = 'warning'
+            subject = f"Alerta del sistema: {alert_type}"
         
-        if 'name' in task_data:
-            message += f"\nNombre: {task_data['name']}"
+        # Crear mensaje según tipo
+        if alert_type == 'api_limit':
+            message = (
+                f"Se está alcanzando el límite de API para {alert_data.get('service')}.\n"
+                f"Uso actual: {alert_data.get('current_usage')} de {alert_data.get('max_limit')} "
+                f"({alert_data.get('usage_percent', 0):.1f}%)."
+            )
+        elif alert_type == 'error':
+            message = (
+                f"Se ha producido un error en el sistema: {alert_data.get('error_message', 'Desconocido')}.\n"
+                f"Componente: {alert_data.get('component', 'Desconocido')}"
+            )
+        elif alert_type == 'performance':
+            message = (
+                f"Se ha detectado un problema de rendimiento en {alert_data.get('component', 'Sistema')}.\n"
+                f"Métrica: {alert_data.get('metric', 'Desconocida')} = {alert_data.get('value', 'Desconocido')}"
+            )
+        else:
+            message = f"Alerta del sistema: {alert_data.get('message', 'Sin detalles')}"
         
-        if 'duration' in task_data:
-            message += f"\nDuración: {task_data['duration']} segundos"
+        # Formatear mensaje con detalles adicionales
+        subject, message = self._format_alert_message(alert_type, subject, message, alert_data)
         
-        if not success and 'error' in task_data:
-            message += f"\n\nError: {task_data['error']}"
-        
-        self.send_notification(
-            notification_type=f"task_{task_type}",
+        # Enviar notificación
+        return self.send_notification(
+            notification_type=f"system_{alert_type}",
             subject=subject,
             message=message,
-            data=task_data,
+            data=alert_data,
             level=level,
             user_id=user_id
         )
     
-    def notify_content_performance(self, content_id: str, platform: str, metrics: Dict, user_id: str = None):
+    def send_content_alert(self, alert_data: Dict, level: str = 'warning', user_id: str = None) -> str:
         """
-        Envía notificación sobre el rendimiento de un contenido específico
+        Envía alerta relacionada con contenido
+        
+        Args:
+            alert_data: Datos de la alerta
+            level: Nivel de alerta
+            user_id: ID del usuario destinatario
+            
+        Returns:
+            ID de la notificación enviada
         """
-        performance_threshold = self.alerts_config.get('content_performance', {}).get('threshold', 0.2)
-        if user_id and user_id in self.user_configs:
-            performance_threshold = self.user_configs[user_id].get('alert_preferences', {}).get('performance_threshold', performance_threshold)
+        # Extraer tipo de alerta
+        alert_type = alert_data.get('alert_type', 'content')
         
-        views_performance = metrics.get('views_vs_expected', 0)
-        engagement_performance = metrics.get('engagement_vs_expected', 0)
-        conversion_performance = metrics.get('conversion_vs_expected', 0)
-        
-        avg_performance = (views_performance + engagement_performance + conversion_performance) / 3
-        
-        if avg_performance > performance_threshold:
-            performance_type = "positive"
-            subject = f"📈 Contenido con rendimiento excepcional en {platform}"
-            message = f"El contenido está superando las expectativas en {platform}."
-            level = "info"
-        elif avg_performance < -performance_threshold:
-            performance_type = "negative"
-            subject = f"📉 Contenido con bajo rendimiento en {platform}"
-            message = f"El contenido está por debajo de las expectativas en {platform}."
-            level = "warning"
+        # Crear asunto según tipo
+        if alert_type == 'shadowban':
+            subject = f"Posible shadowban detectado: {alert_data.get('platform')}"
+        elif alert_type == 'saturation':
+            subject = f"Saturación de nicho: {alert_data.get('niche')}"
+        elif alert_type == 'viral_potential':
+            subject = f"Oportunidad viral: {alert_data.get('content_id')}"
+        elif alert_type == 'distribution':
+            subject = f"Problema de distribución: {alert_data.get('platform')}"
         else:
-            return
+            subject = f"Alerta de contenido: {alert_type}"
         
-        message += "\n\nMétricas de rendimiento:"
-        
-        if 'views' in metrics:
-            message += f"\n- Vistas: {metrics['views']}"
-            if 'views_vs_expected' in metrics:
-                deviation = metrics['views_vs_expected'] * 100
-                direction = "por encima" if deviation > 0 else "por debajo"
-                message += f" ({abs(deviation):.1f}% {direction} de lo esperado)"
-        
-        if 'engagement_rate' in metrics:
-            message += f"\n- Tasa de engagement: {metrics['engagement_rate']:.2%}"
-            if 'engagement_vs_expected' in metrics:
-                deviation = metrics['engagement_vs_expected'] * 100
-                direction = "por encima" if deviation > 0 else "por debajo"
-                message += f" ({abs(deviation):.1f}% {direction} de lo esperado)"
-        
-        if 'conversion_rate' in metrics:
-            message += f"\n- Tasa de conversión: {metrics['conversion_rate']:.2%}"
-            if 'conversion_vs_expected' in metrics:
-                deviation = metrics['conversion_vs_expected'] * 100
-                direction = "por encima" if deviation > 0 else "por debajo"
-                message += f" ({abs(deviation):.1f}% {direction} de lo esperado)"
-        
-        if performance_type == "positive":
-            message += "\n\nRecomendaciones:"
-            message += "\n- Considera crear más contenido similar"
-            message += "\n- Analiza qué factores contribuyeron al éxito"
-            message += "\n- Promociona este contenido en otras plataformas"
+        # Crear mensaje según tipo
+        if alert_type == 'shadowban':
+            message = (
+                f"Se ha detectado un posible shadowban en {alert_data.get('platform')}.\n"
+                f"Contenido afectado: {alert_data.get('content_id')}\n"
+                f"Métricas anómalas detectadas."
+            )
+        elif alert_type == 'saturation':
+            message = (
+                f"Se ha detectado saturación en el nicho {alert_data.get('niche')}.\n"
+                f"Recomendamos diversificar o encontrar un ángulo diferente."
+            )
+        elif alert_type == 'viral_potential':
+            message = (
+                f"Se ha detectado potencial viral en el contenido {alert_data.get('content_id')}.\n"
+                f"Puntuación de oportunidad: {alert_data.get('opportunity_score', 0):.2f}/1.0\n"
+                f"Recomendamos promoción adicional."
+            )
+        elif alert_type == 'distribution':
+            message = (
+                f"Se ha detectado un problema de distribución en {alert_data.get('platform')}.\n"
+                f"Contenido afectado: {alert_data.get('content_id')}\n"
+                f"Métricas por debajo de lo esperado."
+            )
         else:
-            message += "\n\nRecomendaciones:"
-            message += "\n- Revisa el título, miniaturas y optimización"
-            message += "\n- Considera ajustar la estrategia de distribución"
-            message += "\n- Evalúa si el contenido se alinea con los intereses de tu audiencia"
+            message = f"Alerta de contenido: {alert_data.get('message', 'Sin detalles')}"
         
-        self.send_notification(
-            notification_type=f"content_performance_{performance_type}",
+        # Formatear mensaje con detalles adicionales
+        subject, message = self._format_alert_message(alert_type, subject, message, alert_data)
+        
+        # Enviar notificación
+        return self.send_notification(
+            notification_type=f"content_{alert_type}",
             subject=subject,
             message=message,
-            data={
-                'content_id': content_id,
-                'platform': platform,
-                **metrics
-            },
+            data=alert_data,
             level=level,
             user_id=user_id
         )
-    
-    def notify_system_status(self, status: str, details: Dict = None, user_id: str = None):
-        """
-        Envía notificación sobre el estado del sistema
-        """
-        details = details or {}
-        
-        status_config = {
-            'ok': {
-                'subject': '✅ Sistema funcionando correctamente',
-                'message': 'Todos los componentes del sistema están funcionando correctamente.',
-                'level': 'info'
-            },
-            'warning': {
-                'subject': '⚠️ Advertencia del sistema',
-                'message': 'Se han detectado problemas menores en el sistema.',
-                'level': 'warning'
-            },
-            'error': {
-                'subject': '❌ Error en el sistema',
-                'message': 'Se han detectado errores en el sistema que requieren atención.',
-                'level': 'warning'
-            },
-            'critical': {
-                'subject': '🚨 Error crítico en el sistema',
-                'message': 'Se han detectado errores críticos que afectan el funcionamiento del sistema.',
-                'level': 'critical'
-            }
-        }
-        
-        config = status_config.get(status, status_config['warning'])
-        
-        message = config['message'] + '\n\n'
-        
-        if 'affected_components' in details:
-            message += "Componentes afectados:\n"
-            for component in details['affected_components']:
-                message += f"- {component}\n"
-            message += "\n"
-        
-        if 'errors' in details:
-            message += "Errores detectados:\n"
-            for error in details['errors']:
-                message += f"- {error}\n"
-            message += "\n"
-        
-        if 'resource_usage' in details:
-            message += "Uso de recursos:\n"
-            for resource, usage in details['resource_usage'].items():
-                message += f"- {resource}: {usage}\n"
-            message += "\n"
-        
-        if 'recommended_actions' in details:
-            message += "Acciones recomendadas:\n"
-            for action in details['recommended_actions']:
-                message += f"- {action}\n"
-        
-        self.send_notification(
-            notification_type=f"system_status_{status}",
-            subject=config['subject'],
-            message=message,
-            data=details,
-            level=config['level'],
-            user_id=user_id
-        )
-    
-    def get_notification_history(self, limit: int = 50, notification_type: str = None, 
-                               level: str = None, start_date: str = None, 
-                               end_date: str = None, user_id: str = None) -> List[Dict]:
-        """
-        Obtiene historial de notificaciones con filtros opcionales
-        """
-        start_datetime = None
-        end_datetime = None
-        
-        if start_date:
-            try:
-                start_datetime = datetime.datetime.fromisoformat(start_date)
-            except ValueError:
-                logger.warning(f"Formato de fecha de inicio no válido: {start_date}")
-        
-        if end_date:
-            try:
-                end_datetime = datetime.datetime.fromisoformat(end_date)
-            except ValueError:
-                logger.warning(f"Formato de fecha de fin no válido: {end_date}")
-        
-        filtered_notifications = []
-        
-        for notification in reversed(self.notification_history):
-            if notification_type and not notification['type'].startswith(notification_type):
-                continue
-            
-            if level and notification['level'] != level:
-                continue
-            
-            if user_id and notification.get('user_id') != user_id:
-                continue
-            
-            if start_datetime:
-                notification_datetime = datetime.datetime.fromisoformat(notification['timestamp'])
-                if notification_datetime < start_datetime:
-                    continue
-            
-            if end_datetime:
-                notification_datetime = datetime.datetime.fromisoformat(notification['timestamp'])
-                if notification_datetime > end_datetime:
-                    continue
-            
-            filtered_notifications.append(notification)
-            
-            if len(filtered_notifications) >= limit:
-                break
-        
-        return filtered_notifications
-    
-    def get_notification_metrics(self, user_id: str = None) -> Dict:
-        """
-        Obtiene métricas de notificaciones
-        """
-        if user_id:
-            user_metrics = self.notification_metrics['user_metrics'].get(user_id, {
-                'total_sent': 0,
-                'success_by_channel': {},
-                'failures_by_channel': {}
-            })
-            return {
-                'total_sent': user_metrics['total_sent'],
-                'success_by_channel': dict(user_metrics['success_by_channel']),
-                'failures_by_channel': dict(user_metrics['failures_by_channel']),
-                'escalated_notifications': self.notification_metrics['escalated_notifications'],
-                'suppressed_notifications': self.notification_metrics['suppressed_notifications'],
-                'grouped_notifications': self.notification_metrics['grouped_notifications'],
-                'average_delivery_time': f"{self.notification_metrics['average_delivery_time']:.3f} seconds"
-            }
-        
-        return {
-            'total_sent': self.notification_metrics['total_sent'],
-            'success_by_channel': dict(self.notification_metrics['success_by_channel']),
-            'failures_by_channel': dict(self.notification_metrics['failures_by_channel']),
-            'escalated_notifications': self.notification_metrics['escalated_notifications'],
-            'suppressed_notifications': self.notification_metrics['suppressed_notifications'],
-            'grouped_notifications': self.notification_metrics['grouped_notifications'],
-            'average_delivery_time': f"{self.notification_metrics['average_delivery_time']:.3f} seconds",
-            'user_metrics': {k: {
-                'total_sent': v['total_sent'],
-                'success_by_channel': dict(v['success_by_channel']),
-                'failures_by_channel': dict(v['failures_by_channel'])
-            } for k, v in self.notification_metrics['user_metrics'].items()}
-        }
-    
-    def update_notification_channels(self, channel_updates: Dict) -> bool:
-        """
-        Actualiza la configuración de canales de notificación
-        """
-        try:
-            for channel, config in channel_updates.items():
-                if channel in self.notification_channels:
-                    self.notification_channels[channel].update(config)
-                    logger.info(f"Canal de notificación actualizado: {channel}")
-                else:
-                    self.notification_channels[channel] = config
-                    logger.info(f"Nuevo canal de notificación añadido: {channel}")
-            
-            config_file = os.path.join('config', 'notification_channels.json')
-            os.makedirs(os.path.dirname(config_file), exist_ok=True)
-            
-            with open(config_file, 'w', encoding='utf-8') as f:
-                json.dump(self.notification_channels, f, indent=4)
-            
-            self._validate_channels_config()
-            logger.info("Configuración de canales de notificación guardada")
-            return True
-        
-        except Exception as e:
-            logger.error(f"Error al actualizar canales de notificación: {str(e)}")
-            return False
-    
-    def update_user_configs(self, user_configs: Dict) -> bool:
-        """
-        Actualiza la configuración de usuarios
-        """
-        try:
-            for user_id, config in user_configs.items():
-                self.user_configs[user_id] = config
-                logger.info(f"Configuración actualizada para usuario: {user_id}")
-            
-            config_file = os.path.join('config', 'user_configs.json')
-            os.makedirs(os.path.dirname(config_file), exist_ok=True)
-            
-            with open(config_file, 'w', encoding='utf-8') as f:
-                json.dump(self.user_configs, f, indent=4)
-            
-            self._validate_user_configs()
-            logger.info("Configuración de usuarios guardada")
-            return True
-        
-        except Exception as e:
-            logger.error(f"Error al actualizar configuración de usuarios: {str(e)}")
-            return False
-    
-    def cancel_notification(self, notification_id: str) -> bool:
-        """
-        Cancela una notificación programada (ej. escalado)
-        """
-        for notification in self.notification_history:
-            if notification['id'] == notification_id and notification['escalation_status'] == 'none':
-                notification['escalation_status'] = 'cancelled'
-                logger.info(f"Notificación {notification_id} cancelada")
-                return True
-        
-        logger.warning(f"Notificación {notification_id} no encontrada o no cancelable")
-        return False
-
-# Ejemplo de uso
-if __name__ == "__main__":
-    os.makedirs('logs', exist_ok=True)
-    os.makedirs('config', exist_ok=True)
-    
-    notifier = Notifier()
-    
-    # Ejemplo de configuración de usuario
-    user_configs = {
-        'user1': {
-            'channels': ['email', 'telegram'],
-            'email_recipients': ['user1@example.com'],
-            'telegram_chat_id': 'USER1_CHAT_ID',
-            'custom_webhooks': [
-                {'url': 'https://example.com/webhook', 'format': 'json', 'headers': {'Authorization': 'Bearer token'}},
-                {'url': 'https://example.com/webhook2', 'format': 'xml'}
-            ],
-            'alert_preferences': {
-                'levels': {'warning': 'critical'},
-                'shadowban_threshold': 0.8,
-                'performance_threshold': 0.25,
-                'niche_saturation': {
-                    'view_decline_rate': 0.25,
-                    'engagement_decline_rate': 0.2
-                }
-            },
-            'message_template': {
-                'subject': 'Alerta: {subject}',
-                'message': '{message}\n\nDetalles adicionales:\n{details}'
-            }
-        }
-    }
-    
-    notifier.update_user_configs(user_configs)
-    
-    # Ejemplo de notificación para usuario
-    notifier.send_notification(
-        notification_type="test",
-        subject="Prueba de notificación",
-        message="Este es un mensaje de prueba del sistema de notificaciones.",
-        data={"test_key": "test_value"},
-        level="info",
-        user_id="user1"
-    )
-    
-    # Ejemplo de notificación agrupada
-    notifications = [
-        {
-            'type': 'test1',
-            'subject': 'Prueba 1',
-            'message': 'Mensaje de prueba 1',
-            'data': {'key': 'value1'},
-            'level': 'info',
-            'user_id': 'user1',
-            'timestamp': datetime.datetime.now().isoformat()
-        },
-        {
-            'type': 'test1',
-            'subject': 'Prueba 2',
-            'message': 'Mensaje de prueba 2',
-            'data': {'key': 'value2'},
-            'level': 'warning',
-            'user_id': 'user1',
-            'timestamp': datetime.datetime.now().isoformat()
-        }
-    ]
-    
-    notifier.notify_batch(notifications)
-    
-    print("Notificaciones enviadas correctamente")

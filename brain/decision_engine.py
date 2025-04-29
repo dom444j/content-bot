@@ -7,6 +7,7 @@ Este módulo implementa algoritmos avanzados de aprendizaje por refuerzo:
 - Redistribución de tráfico optimizada por ROI
 - Sistema de reintentos automáticos para robustez
 - Integración profunda con KnowledgeBase para aprendizaje continuo
+- Evaluación continua y optimización avanzada del rendimiento
 """
 
 import os
@@ -20,7 +21,11 @@ from typing import Dict, List, Any, Optional, Tuple
 import time
 from functools import wraps
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception_type
+import pickle
+import bson
+from pymongo.binary import Binary
 import scipy.stats as stats
+from datetime import timedelta
 
 # Añadir directorio raíz al path para importaciones
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
@@ -189,8 +194,16 @@ class DecisionEngine:
         self.decision_cache: Dict[str, Dict] = {}
         self.cache_timeout = 3600  # 1 hora en segundos
         
+        # Configuración para evaluación continua
+        self.evaluation_interval = self.strategy.get('evaluation', {}).get('interval_hours', 6)
+        self.last_evaluation_time = datetime.datetime.now() - timedelta(hours=self.evaluation_interval + 1)
+        self.performance_history = {}
+        
         # Cargar datos históricos
         self._load_bandit_state()
+        
+        # Programar evaluación continua
+        self._schedule_continuous_evaluation()
         
         self._initialized = True
         logger.info("Decision Engine inicializado correctamente", extra={'context': 'init'})
@@ -234,6 +247,9 @@ class DecisionEngine:
                 "min_samples": 100,
                 "performance_window_days": 7
             },
+            "evaluation": {
+                "interval_hours": 6
+            },
             "cta_strategies": {
                 "timing": {
                     "early": {"start": 0, "end": 3},
@@ -270,8 +286,22 @@ class DecisionEngine:
                         bandit = LinUCBBandit(feature_dim=self.feature_dim, alpha=self.exploration_alpha)
                         for action, params in data.items():
                             bandit.add_action(action)
-                            bandit.A[action] = np.array(params.get('A', np.identity(self.feature_dim)))
-                            bandit.b[action] = np.array(params.get('b', np.zeros(self.feature_dim)))
+                            
+                            # Deserializar matrices y vectores usando el formato optimizado
+                            if 'A_binary' in params:
+                                # Usar deserialización binaria si está disponible
+                                bandit.A[action] = pickle.loads(params['A_binary'])
+                            else:
+                                # Fallback a formato JSON para compatibilidad
+                                bandit.A[action] = np.array(params.get('A', np.identity(self.feature_dim)))
+                                
+                            if 'b_binary' in params:
+                                # Usar deserialización binaria si está disponible
+                                bandit.b[action] = pickle.loads(params['b_binary'])
+                            else:
+                                # Fallback a formato JSON para compatibilidad
+                                bandit.b[action] = np.array(params.get('b', np.zeros(self.feature_dim)))
+                                
                         getattr(self, bandit_type)[key] = bandit
                 logger.info("Estado de bandits cargado correctamente", extra={'context': 'bandit_load'})
             else:
@@ -282,38 +312,50 @@ class DecisionEngine:
     
     @retry_on_failure
     def _save_bandit_state(self):
-        """Guarda el estado actual de los bandits en la base de conocimiento"""
+        """Guarda el estado actual de los bandits en la base de conocimiento usando serialización binaria"""
         try:
             bandit_state = {
                 'type': 'state',
                 'cta_bandits': {
                     key: {
                         action: {
-                            'A': bandit.A[action].tolist(),
-                            'b': bandit.b[action].tolist()
+                            # Serializar matrices y vectores en formato binario para eficiencia
+                            'A_binary': Binary(pickle.dumps(bandit.A[action], protocol=4)),
+                            'b_binary': Binary(pickle.dumps(bandit.b[action], protocol=4)),
+                            # Mantener versiones JSON para compatibilidad y depuración
+                            'A_shape': bandit.A[action].shape,
+                            'b_shape': bandit.b[action].shape,
+                            'samples': int(np.sum(bandit.A[action].diagonal()))
                         } for action in bandit.A
                     } for key, bandit in self.cta_bandits.items()
                 },
                 'visual_bandits': {
                     key: {
                         action: {
-                            'A': bandit.A[action].tolist(),
-                            'b': bandit.b[action].tolist()
+                            'A_binary': Binary(pickle.dumps(bandit.A[action], protocol=4)),
+                            'b_binary': Binary(pickle.dumps(bandit.b[action], protocol=4)),
+                            'A_shape': bandit.A[action].shape,
+                            'b_shape': bandit.b[action].shape,
+                            'samples': int(np.sum(bandit.A[action].diagonal()))
                         } for action in bandit.A
                     } for key, bandit in self.visual_bandits.items()
                 },
                 'voice_bandits': {
                     key: {
                         action: {
-                            'A': bandit.A[action].tolist(),
-                            'b': bandit.b[action].tolist()
+                            'A_binary': Binary(pickle.dumps(bandit.A[action], protocol=4)),
+                            'b_binary': Binary(pickle.dumps(bandit.b[action], protocol=4)),
+                            'A_shape': bandit.A[action].shape,
+                            'b_shape': bandit.b[action].shape,
+                            'samples': int(np.sum(bandit.A[action].diagonal()))
                         } for action in bandit.A
                     } for key, bandit in self.voice_bandits.items()
                 },
                 'last_updated': datetime.datetime.now().isoformat()
             }
             self.kb.save_to_mongodb('bandits', bandit_state, {'type': 'state'})
-            logger.info("Estado de bandits guardado correctamente", extra={'context': 'bandit_save'})
+            logger.info("Estado de bandits guardado correctamente usando serialización binaria", 
+                       extra={'context': 'bandit_save'})
         except Exception as e:
             logger.error(f"Error al guardar estado de bandits: {str(e)}", extra={'context': 'bandit_save'})
             raise DecisionEngineError(f"Error al guardar estado de bandits: {str(e)}")
@@ -339,8 +381,7 @@ class DecisionEngine:
         
         Args:
             context: Diccionario con información contextual
-            
-        Returns:
+            Returns:
             Vector de características normalizado
         """
         self._validate_context(context)
@@ -401,8 +442,7 @@ class DecisionEngine:
         
         Args:
             context: Información contextual
-            
-        Returns:
+            Returns:
             Estrategia de CTA seleccionada
         """
         niche = context.get('niche', 'general')
@@ -452,8 +492,7 @@ class DecisionEngine:
         
         Args:
             context: Información contextual
-            
-        Returns:
+            Returns:
             Estrategia visual seleccionada
         """
         niche = context.get('niche', 'general')
@@ -497,8 +536,7 @@ class DecisionEngine:
         
         Args:
             context: Información contextual
-            
-        Returns:
+            Returns:
             Estrategia de voz seleccionada
         """
         niche = context.get('niche', 'general')
@@ -632,8 +670,7 @@ class DecisionEngine:
         
         Args:
             channel_metrics: Métricas por canal
-            
-        Returns:
+            Returns:
             True si se debe redistribuir, False en caso contrario
         """
         low_ctr_channels = []
@@ -658,8 +695,7 @@ class DecisionEngine:
         
         Args:
             channel_metrics: Métricas por canal
-            
-        Returns:
+            Returns:
             Factores de redistribución por canal
         """
         low_ctr_channels = {
@@ -701,8 +737,7 @@ class DecisionEngine:
         
         Args:
             context: Información contextual
-            
-        Returns:
+            Returns:
             Decisión completa con estrategias
         """
         try:
@@ -741,8 +776,7 @@ class DecisionEngine:
         Args:
             content_id: Identificador del contenido
             metrics: Métricas actuales
-            
-        Returns:
+            Returns:
             Ajustes recomendados
         """
         try:
@@ -800,38 +834,426 @@ class DecisionEngine:
             )
             return {}
     
+    def _schedule_continuous_evaluation(self):
+        """Programa la evaluación continua de los bandits"""
+        # Esta función sería llamada por un scheduler externo
+        # Aquí solo verificamos si es momento de realizar la evaluación
+        current_time = datetime.datetime.now()
+        hours_since_last = (current_time - self.last_evaluation_time).total_seconds() / 3600
+        
+        if hours_since_last >= self.evaluation_interval:
+            logger.info(f"Iniciando evaluación continua de bandits (última: {hours_since_last:.1f}h atrás)",
+                       extra={'context': 'continuous_evaluation'})
+            self.run_continuous_evaluation()
+            self.last_evaluation_time = current_time
+    
+    def run_continuous_evaluation(self):
+        """Ejecuta una evaluación completa del rendimiento de todos los bandits"""
+        try:
+            # 1. Evaluar bandits de CTA
+            cta_performance = self._evaluate_bandit_group('cta_bandits')
+            
+            # 2. Evaluar bandits visuales
+            visual_performance = self._evaluate_bandit_group('visual_bandits')
+            
+            # 3. Evaluar bandits de voz
+            voice_performance = self._evaluate_bandit_group('voice_bandits')
+            
+            # 4. Calcular métricas agregadas
+            aggregated_metrics = self._calculate_aggregated_metrics(
+                cta_performance, visual_performance, voice_performance)
+            
+            # 5. Guardar resultados de evaluación
+            evaluation_result = {
+                'timestamp': datetime.datetime.now().isoformat(),
+                'cta_performance': cta_performance,
+                'visual_performance': visual_performance,
+                'voice_performance': voice_performance,
+                'aggregated_metrics': aggregated_metrics
+            }
+            
+            # Guardar en la base de conocimiento
+            self.kb.save_to_mongodb('bandit_evaluations', evaluation_result)
+            
+            # Actualizar historial de rendimiento
+            self.performance_history[datetime.datetime.now().isoformat()] = aggregated_metrics
+            
+            # Limpiar historial antiguo (mantener solo últimos 30 días)
+            self._clean_old_performance_history()
+            
+            # 6. Generar recomendaciones de optimización
+            recommendations = self._generate_optimization_recommendations(evaluation_result)
+            
+            logger.info(f"Evaluación continua completada. Métricas agregadas: {aggregated_metrics}",
+                       extra={'context': 'continuous_evaluation'})
+            
+            return evaluation_result, recommendations
+            
+        except Exception as e:
+            logger.error(f"Error en evaluación continua: {str(e)}", 
+                        extra={'context': 'continuous_evaluation'})
+            return None, None
+    
+    def _evaluate_bandit_group(self, bandit_type: str) -> Dict[str, Dict]:
+        """Evalúa el rendimiento de un grupo de bandits"""
+        bandit_dict = getattr(self, bandit_type)
+        performance = {}
+        
+        for bandit_key, bandit in bandit_dict.items():
+            # Obtener datos históricos de rendimiento
+            historical_data = self._get_historical_performance_data(bandit_type, bandit_key)
+            
+            # Calcular métricas por acción
+            action_metrics = {}
+            for action in bandit.A:
+                # Obtener datos específicos de esta acción
+                action_data = [d for d in historical_data if d.get('action') == action]
+                
+                if not action_data:
+                    continue
+                
+                # Calcular métricas
+                metrics = {
+                    'ctr': self._calculate_mean_metric([d.get('metrics', {}).get('ctr', 0) for d in action_data]),
+                    'conversion_rate': self._calculate_mean_metric([d.get('metrics', {}).get('conversion_rate', 0) for d in action_data]),
+                    'engagement_rate': self._calculate_mean_metric([d.get('metrics', {}).get('engagement_rate', 0) for d in action_data]),
+                    'retention_rate': self._calculate_mean_metric([d.get('metrics', {}).get('retention_rate', 0) for d in action_data]),
+                }
+                
+                # Calcular recompensa acumulada
+                cumulative_reward = sum(self._calculate_reward(d.get('metrics', {})) for d in action_data)
+                
+                # Calcular intervalo de confianza
+                if len(action_data) >= 5:  # Mínimo de muestras para estadísticas significativas
+                    ctr_values = [d.get('metrics', {}).get('ctr', 0) for d in action_data]
+                    ci_low, ci_high = self._calculate_confidence_interval(ctr_values)
+                    confidence_interval = {'low': ci_low, 'high': ci_high}
+                else:
+                    confidence_interval = {'low': 0, 'high': 0}
+                
+                # Calcular tendencia (últimos 7 días vs anteriores)
+                trend = self._calculate_metric_trend(action_data, 'ctr')
+                
+                # Guardar métricas de esta acción
+                action_metrics[action] = {
+                    'metrics': metrics,
+                    'cumulative_reward': cumulative_reward,
+                    'samples': len(action_data),
+                    'confidence_interval': confidence_interval,
+                    'trend': trend,
+                    'last_updated': datetime.datetime.now().isoformat()
+                }
+            
+            # Identificar la mejor acción basada en recompensa acumulada
+            if action_metrics:
+                best_action = max(action_metrics.items(), 
+                                 key=lambda x: x[1]['cumulative_reward'])
+                
+                performance[bandit_key] = {
+                    'action_metrics': action_metrics,
+                    'best_action': best_action[0],
+                    'best_action_reward': best_action[1]['cumulative_reward'],
+                    'total_samples': sum(m['samples'] for m in action_metrics.values()),
+                    'evaluation_time': datetime.datetime.now().isoformat()
+                }
+        
+        return performance
+    
+    def _get_historical_performance_data(self, bandit_type: str, bandit_key: str) -> List[Dict]:
+        """Obtiene datos históricos de rendimiento para un bandit específico"""
+        # Determinar el tipo de colección según el tipo de bandit
+        collection_prefix = bandit_type.split('_')[0]  # 'cta', 'visual', 'voice'
+        
+        # Obtener datos de los últimos 30 días
+        start_date = datetime.datetime.now() - datetime.timedelta(days=30)
+        
+        # Consultar la base de conocimiento
+        query = {
+            'bandit_key': bandit_key,
+            'timestamp': {'$gte': start_date.isoformat()}
+        }
+        
+        historical_data = self.kb.get_all_from_mongodb(f'{collection_prefix}_performance', query)
+        return historical_data if historical_data else []
+    
+    def _calculate_mean_metric(self, values: List[float]) -> float:
+        """Calcula la media de una métrica, manejando listas vacías"""
+        return sum(values) / len(values) if values else 0
+    
+    def _calculate_confidence_interval(self, values: List[float], confidence: float = 0.95) -> Tuple[float, float]:
+        """Calcula el intervalo de confianza para una lista de valores"""
+        if not values or len(values) < 2:
+            return 0, 0
+            
+        mean = np.mean(values)
+        sem = stats.sem(values)
+        ci = stats.t.interval(confidence, len(values)-1, loc=mean, scale=sem)
+        return ci[0], ci[1]
+    
+    def _calculate_metric_trend(self, data: List[Dict], metric_name: str) -> float:
+        """Calcula la tendencia de una métrica (cambio porcentual)"""
+        if not data or len(data) < 2:
+            return 0
+            
+        # Ordenar por timestamp
+        sorted_data = sorted(data, key=lambda x: x.get('timestamp', ''))
+        
+        # Dividir en dos períodos (reciente y anterior)
+        mid_point = len(sorted_data) // 2
+        recent_data = sorted_data[mid_point:]
+        previous_data = sorted_data[:mid_point]
+        
+        if not recent_data or not previous_data:
+            return 0
+            
+        # Calcular medias
+        recent_mean = np.mean([d.get('metrics', {}).get(metric_name, 0) for d in recent_data])
+        previous_mean = np.mean([d.get('metrics', {}).get(metric_name, 0) for d in previous_data])
+        
+        # Calcular cambio porcentual
+        if previous_mean == 0:
+            return 0
+        
+        return (recent_mean - previous_mean) / previous_mean
+    
+    def _calculate_aggregated_metrics(self, cta_perf: Dict, visual_perf: Dict, voice_perf: Dict) -> Dict:
+        """Calcula métricas agregadas de todos los bandits"""
+        # Contar total de muestras
+        total_samples = 0
+        for perf_dict in [cta_perf, visual_perf, voice_perf]:
+            for bandit_key, metrics in perf_dict.items():
+                total_samples += metrics.get('total_samples', 0)
+        
+        # Calcular CTR promedio ponderado
+        weighted_ctr = 0
+        total_weight = 0
+        
+        for perf_dict in [cta_perf, visual_perf, voice_perf]:
+            for bandit_key, metrics in perf_dict.items():
+                for action, action_metrics in metrics.get('action_metrics', {}).items():
+                    samples = action_metrics.get('samples', 0)
+                    ctr = action_metrics.get('metrics', {}).get('ctr', 0)
+                    weighted_ctr += ctr * samples
+                    total_weight += samples
+        
+        avg_ctr = weighted_ctr / total_weight if total_weight > 0 else 0
+        
+        # Calcular otras métricas agregadas
+        return {
+            'avg_ctr': avg_ctr,
+            'total_samples': total_samples,
+            'cta_bandits_count': len(cta_perf),
+            'visual_bandits_count': len(visual_perf),
+            'voice_bandits_count': len(voice_perf),
+            'evaluation_time': datetime.datetime.now().isoformat()
+        }
+    
+    def _clean_old_performance_history(self):
+        """Limpia entradas antiguas del historial de rendimiento"""
+        cutoff_date = datetime.datetime.now() - datetime.timedelta(days=30)
+        cutoff_str = cutoff_date.isoformat()
+        
+        # Eliminar entradas antiguas
+        self.performance_history = {
+            ts: metrics for ts, metrics in self.performance_history.items()
+            if ts >= cutoff_str
+        }
+    
+    def _generate_optimization_recommendations(self, evaluation_result: Dict) -> Dict[str, List[Dict]]:
+        """Genera recomendaciones de optimización basadas en la evaluación"""
+        recommendations = {
+            'cta': [],
+            'visual': [],
+            'voice': []
+        }
+        
+        # Analizar bandits de CTA
+        for bandit_key, metrics in evaluation_result.get('cta_performance', {}).items():
+            action_metrics = metrics.get('action_metrics', {})
+            
+            # Identificar acciones de bajo rendimiento
+            for action, action_data in action_metrics.items():
+                ctr = action_data.get('metrics', {}).get('ctr', 0)
+                samples = action_data.get('samples', 0)
+                trend = action_data.get('trend', 0)
+                
+                # Si tiene suficientes muestras, CTR bajo y tendencia negativa
+                if samples >= 50 and ctr < 0.03 and trend < 0:
+                    recommendations['cta'].append({
+                        'bandit_key': bandit_key,
+                        'action': action,
+                        'issue': 'low_ctr_negative_trend',
+                        'current_ctr': ctr,
+                        'samples': samples,
+                        'recommendation': 'Considerar reemplazar esta estrategia de CTA o ajustar timing'
+                    })
+        
+        # Analizar bandits visuales
+        for bandit_key, metrics in evaluation_result.get('visual_performance', {}).items():
+            action_metrics = metrics.get('action_metrics', {})
+            
+            # Identificar acciones de bajo rendimiento
+            for action, action_data in action_metrics.items():
+                engagement = action_data.get('metrics', {}).get('engagement_rate', 0)
+                samples = action_data.get('samples', 0)
+                
+                # Si tiene suficientes muestras y engagement bajo
+                if samples >= 50 and engagement < 0.2:
+                    recommendations['visual'].append({
+                        'bandit_key': bandit_key,
+                        'action': action,
+                        'issue': 'low_engagement',
+                        'current_engagement': engagement,
+                        'samples': samples,
+                        'recommendation': 'Considerar un estilo visual más impactante o contrastante'
+                    })
+        
+        # Analizar bandits de voz
+        for bandit_key, metrics in evaluation_result.get('voice_performance', {}).items():
+            action_metrics = metrics.get('action_metrics', {})
+            
+            # Identificar acciones de bajo rendimiento
+            for action, action_data in action_metrics.items():
+                retention = action_data.get('metrics', {}).get('retention_rate', 0)
+                samples = action_data.get('samples', 0)
+                
+                # Si tiene suficientes muestras y retención baja
+                if samples >= 50 and retention < 0.4:
+                    recommendations['voice'].append({
+                        'bandit_key': bandit_key,
+                        'action': action,
+                        'issue': 'low_retention',
+                        'current_retention': retention,
+                        'samples': samples,
+                        'recommendation': 'Considerar un tono de voz más dinámico o cambiar el ritmo'
+                    })
+        
+        return recommendations
+    
     def evaluate_bandit_performance(self, bandit_type: str, bandit_key: str) -> Dict[str, Any]:
         """
-        Evalúa el rendimiento de un bandit específico
+        Evalúa el rendimiento de un bandit específico con métricas avanzadas
         
         Args:
             bandit_type: Tipo de bandit (cta, visual, voice)
             bandit_key: Clave del bandit
-            
-        Returns:
-            Informe de rendimiento
+            Returns:
+            Informe de rendimiento detallado
         """
         bandit_dict = getattr(self, f"{bandit_type}_bandits")
         if bandit_key not in bandit_dict:
             return {'status': 'not_found'}
         
         bandit = bandit_dict[bandit_key]
+        
+        # Obtener datos históricos
+        historical_data = self._get_historical_performance_data(f"{bandit_type}_bandits", bandit_key)
+        
+        # Preparar informe básico
         report = {
             'bandit_key': bandit_key,
+            'bandit_type': bandit_type,
             'actions': {},
-            'timestamp': datetime.datetime.now().isoformat()
+            'timestamp': datetime.datetime.now().isoformat(),
+            'historical_performance': {}
         }
         
+        # Analizar cada acción
         for action in bandit.A:
+            # Estimación actual del modelo
             context = np.ones(self.feature_dim)
             A_inv = np.linalg.inv(bandit.A[action])
             mean = context @ bandit.theta[action]
             variance = np.sqrt(context.T @ A_inv @ context)
+            
+            # Datos históricos de esta acción
+            action_data = [d for d in historical_data if d.get('action') == action]
+            
+            # Métricas históricas
+            if action_data:
+                ctr_values = [d.get('metrics', {}).get('ctr', 0) for d in action_data]
+                conversion_values = [d.get('metrics', {}).get('conversion_rate', 0) for d in action_data]
+                
+                # Calcular intervalos de confianza
+                ctr_ci = self._calculate_confidence_interval(ctr_values) if len(ctr_values) >= 5 else (0, 0)
+                conversion_ci = self._calculate_confidence_interval(conversion_values) if len(conversion_values) >= 5 else (0, 0)
+                
+                # Calcular tendencias
+                ctr_trend = self._calculate_metric_trend(action_data, 'ctr')
+                conversion_trend = self._calculate_metric_trend(action_data, 'conversion_rate')
+                
+                historical_metrics = {
+                    'ctr': {
+                        'mean': self._calculate_mean_metric(ctr_values),
+                        'confidence_interval': {'low': ctr_ci[0], 'high': ctr_ci[1]},
+                        'trend': ctr_trend,
+                        'samples': len(ctr_values)
+                    },
+                    'conversion_rate': {
+                        'mean': self._calculate_mean_metric(conversion_values),
+                        'confidence_interval': {'low': conversion_ci[0], 'high': conversion_ci[1]},
+                        'trend': conversion_trend,
+                        'samples': len(conversion_values)
+                    }
+                }
+            else:
+                historical_metrics = {}
+            
+            # Añadir al informe
             report['actions'][action] = {
-                'estimated_reward': float(mean),
-                'confidence': 1.0 - min(float(variance), 1.0),
-                'samples': int(np.sum(bandit.A[action].diagonal()))
+                'model_estimation': {
+                    'estimated_reward': float(mean),
+                    'confidence': 1.0 - min(float(variance), 1.0),
+                    'samples': int(np.sum(bandit.A[action].diagonal()))
+                },
+                'historical_metrics': historical_metrics
             }
+        
+        # Análisis de rendimiento global
+        if historical_data:
+            # Agrupar por día para ver tendencia temporal
+            daily_performance = {}
+            for entry in historical_data:
+                date_str = entry.get('timestamp', '').split('T')[0]
+                if date_str not in daily_performance:
+                    daily_performance[date_str] = []
+                daily_performance[date_str].append(entry)
+            
+            # Calcular métricas diarias
+            for date, entries in daily_performance.items():
+                ctr_values = [e.get('metrics', {}).get('ctr', 0) for e in entries]
+                report['historical_performance'][date] = {
+                    'avg_ctr': self._calculate_mean_metric(ctr_values),
+                    'samples': len(entries)
+                }
+        
+        # Añadir recomendaciones
+        report['recommendations'] = []
+        
+        # Identificar acciones de bajo rendimiento
+        for action, metrics in report['actions'].items():
+            historical = metrics.get('historical_metrics', {})
+            ctr_data = historical.get('ctr', {})
+            
+            if ctr_data and ctr_data.get('samples', 0) >= 50:
+                ctr_mean = ctr_data.get('mean', 0)
+                ctr_trend = ctr_data.get('trend', 0)
+                
+                if ctr_mean < 0.03:
+                    report['recommendations'].append({
+                        'action': action,
+                        'issue': 'low_ctr',
+                        'severity': 'high' if ctr_mean < 0.01 else 'medium',
+                        'recommendation': 'Considerar reemplazar esta estrategia o ajustar parámetros'
+                    })
+                
+                if ctr_trend < -0.1:
+                    report['recommendations'].append({
+                        'action': action,
+                        'issue': 'negative_trend',
+                        'severity': 'high' if ctr_trend < -0.2 else 'medium',
+                        'recommendation': 'Investigar causas de la tendencia negativa'
+                    })
         
         return report
 
@@ -900,5 +1322,11 @@ if __name__ == "__main__":
     print("\nPrueba de evaluación de bandit:")
     report = engine.evaluate_bandit_performance('cta', cta_strategy['bandit_key'])
     print(f"Informe de rendimiento: {json.dumps(report, indent=2)}")
+    
+    print("\nPrueba de evaluación continua:")
+    evaluation_result, recommendations = engine.run_continuous_evaluation()
+    if evaluation_result:
+        print(f"Resultados de evaluación continua: {json.dumps(evaluation_result, indent=2)}")
+        print(f"Recomendaciones: {json.dumps(recommendations, indent=2)}")
     
     print("\nPruebas completadas con éxito")
