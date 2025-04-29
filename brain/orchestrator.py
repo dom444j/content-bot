@@ -1058,7 +1058,7 @@ _Plataforma {platform} habilitada pero faltan campos: {', '.join(missing_fields)
             self._optimize_channels_with_retries()
             
             # 6. Actualizar métricas del sistema
-            self._update_system_metrics()
+                        self._update_system_metrics()
             
             logger.info("Pipeline de procesamiento completado")
             activity_logger.info("Pipeline de procesamiento completado exitosamente")
@@ -1074,6 +1074,46 @@ _Plataforma {platform} habilitada pero faltan campos: {', '.join(missing_fields)
                     message=f"El sistema ha encontrado un error crítico: {str(e)}",
                     level="critical"
                 )
+    
+    def log_activity(self, activity_type: str, details: Dict, level: str = "info") -> None:
+        """
+        Registra actividades del sistema con detalles estructurados
+        
+        Args:
+            activity_type: Tipo de actividad (task_creation, publication, monetization, etc.)
+            details: Detalles de la actividad en formato diccionario
+            level: Nivel de log (info, warning, error, critical)
+        """
+        try:
+            # Añadir timestamp
+            log_entry = {
+                "timestamp": datetime.datetime.now().isoformat(),
+                "type": activity_type,
+                "details": details
+            }
+            
+            # Registrar en el logger de actividad según nivel
+            log_method = getattr(activity_logger, level.lower())
+            log_method(f"{activity_type}: {json.dumps(details)}")
+            
+            # Guardar en base de conocimiento si está disponible
+            knowledge_base = self._load_component('knowledge_base')
+            if knowledge_base:
+                knowledge_base.save_activity_log(log_entry)
+                
+            # Notificar si es crítico
+            if level in ["error", "critical"]:
+                notifier = self._load_component('notifier')
+                if notifier:
+                    notifier.send_notification(
+                        title=f"Actividad {level.upper()}: {activity_type}",
+                        message=f"Detalles: {json.dumps(details, indent=2)}",
+                        level=level
+                    )
+        except Exception as e:
+            # Fallback a logger estándar si falla el registro de actividad
+            logger.error(f"Error al registrar actividad {activity_type}: {str(e)}")
+            logger.info(f"Detalles de actividad: {json.dumps(details)}")
     
     @retry_with_backoff(max_tries=5, backoff_factor=2)
     def _detect_trends_with_retries(self) -> List[Dict]:

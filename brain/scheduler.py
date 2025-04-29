@@ -2128,7 +2128,7 @@ class Scheduler:
             logger.error(f"Error al cargar estado del planificador: {str(e)}")
             return False
     
-    def shutdown(self) -> None:
+        def shutdown(self) -> None:
         """
         Realiza tareas de limpieza antes de apagar el planificador
         """
@@ -2143,3 +2143,197 @@ class Scheduler:
             self.mark_task_completed(task_id, False, "Interrumpida por apagado del sistema")
         
         logger.info("Planificador de tareas apagado correctamente")
+    
+    def retry_failed_tasks(self, max_age_hours: int = 24, max_retries: int = 3, 
+                          backoff_factor: int = 2, jitter_percent: float = 20) -> List[str]:
+        """
+        Reintenta tareas fallidas con estrategia de backoff exponencial inteligente
+        
+        Args:
+            max_age_hours: Edad máxima de tareas a reintentar (en horas)
+            max_retries: Número máximo de reintentos permitidos
+            backoff_factor: Factor para el cálculo de tiempo de espera exponencial
+            jitter_percent: Porcentaje de variación aleatoria en el tiempo de espera
+            
+        Returns:
+            Lista de IDs de tareas programadas para reintento
+        """
+        now = datetime.datetime.now()
+        cutoff_time = now - datetime.timedelta(hours=max_age_hours)
+        retried_tasks = []
+        
+        # Filtrar tareas fallidas recientes del historial
+        failed_tasks = [
+            task for task in self.task_history
+            if (task.get('status') == TaskStatus.FAILED.name and
+                'end_time' in task and
+                datetime.datetime.fromisoformat(task['end_time']) > cutoff_time and
+                task.get('retries', 0) < max_retries)
+        ]
+        
+        logger.info(f"Encontradas {len(failed_tasks)} tareas fallidas elegibles para reintento")
+        
+        # Programar reintentos con backoff exponencial
+        for task in failed_tasks:
+            task_id = task.get('id')
+            retry_count = task.get('retries', 0)
+            
+            # Calcular tiempo de espera con backoff exponencial
+            base_wait_time = backoff_factor ** retry_count
+            
+            # Añadir jitter aleatorio
+            jitter_factor = 1 + random.uniform(-jitter_percent/100, jitter_percent/100)
+            wait_time = base_wait_time * jitter_factor
+            
+            # Calcular tiempo de ejecución
+            execution_time = now + datetime.timedelta(minutes=wait_time)
+            
+            # Registrar intento de reintento
+            self.log_schedule(
+                event_type="task_retry",
+                task_id=task_id,
+                details={
+                    "retry_count": retry_count + 1,
+                    "max_retries": max_retries,
+                    "wait_time_minutes": wait_time,
+                    "execution_time": execution_time.isoformat(),
+                    "original_error": task.get('errors', [])[-1] if task.get('errors') else "Unknown error"
+                }
+            )
+            
+            # Programar reintento
+            try:
+                # Crear copia de la tarea original con estado actualizado
+                retry_task = task.copy()
+                retry_task['status'] = TaskStatus.PENDING.name
+                retry_task['retries'] = retry_count + 1
+                retry_task['retry_history'] = retry_task.get('retry_history', []) + [{
+                    'timestamp': now.isoformat(),
+                    'scheduled_time': execution_time.isoformat(),
+                    'retry_count': retry_count + 1
+                }]
+                
+                # Programar tarea
+                self.schedule_task(
+                    task_type=task.get('type'),
+                    task_data=task.get('data', {}),
+                    execution_time=execution_time,
+                    priority=task.get('priority', TaskPriority.MEDIUM),
+                    task_id=task_id
+                )
+                
+                retried_tasks.append(task_id)
+                logger.info(f"Tarea {task_id} programada para reintento #{retry_count + 1} en {wait_time:.2f} minutos")
+                
+            except Exception as e:
+                logger.error(f"Error al programar reintento para tarea {task_id}: {str(e)}")
+        
+        return retried_tasks
+    
+    def log_schedule(self, event_type: str, task_id: str = None, details: Dict = None) -> None:
+        """
+        Registra información detallada sobre eventos de programación
+        
+        Args:
+            event_type: Tipo de evento (schedule, execute, complete, fail, retry, etc.)
+            task_id: ID de la tarea relacionada (opcional)
+            details: Detalles adicionales del evento (opcional)
+        """
+        try:
+            # Crear entrada de log
+            log_entry = {
+                "timestamp": datetime.datetime.now().isoformat(),
+                "event_type": event_type,
+                "task_id": task_id,
+                "details": details or {}
+            }
+            
+            # Registrar en logger
+            log_message = f"{event_type}"
+            if task_id:
+                log_message += f" - Task ID: {task_id}"
+            
+            if details:
+                # Añadir detalles relevantes al mensaje de log
+                if 'status' in details:
+                    log_message += f" - Status: {details['status']}"
+                if 'execution_time' in details:
+                    log_message += f" - Time: {details['execution_time']}"
+                if 'priority' in details:
+                    log_message += f" - Priority: {details['priority']}"
+                if 'error' in details:
+                    log_message += f" - Error: {details['error']}"
+            
+            logger.info(log_message)
+            
+            # Guardar en base de conocimiento si está disponible
+            try:
+                knowledge_base = KnowledgeBase()
+                knowledge_base.save_scheduler_log(log_entry)
+            except Exception as e:
+                logger.warning(f"No se pudo guardar log en base de conocimiento: {str(e)}")
+            
+            # Actualizar métricas
+            self._update_schedule_metrics(event_type, details)
+            
+        except Exception as e:
+            logger.error(f"Error al registrar evento de programación: {str(e)}")
+    
+    def _update_schedule_metrics(self, event_type: str, details: Dict = None) -> None:
+        """
+        Actualiza métricas internas basadas en eventos de programación
+        
+        Args:
+            event_type: Tipo de evento
+            details: Detalles del evento
+        """
+        # Inicializar métricas si no existen
+        if 'schedule_metrics' not in self.performance_metrics:
+            self.performance_metrics['schedule_metrics'] = {
+                'events_by_type': defaultdict(int),
+                'tasks_by_priority': defaultdict(int),
+                'retry_distribution': defaultdict(int),
+                'hourly_distribution': defaultdict(int)
+            }
+        
+        metrics = self.performance_metrics['schedule_metrics']
+        
+        # Incrementar contador por tipo de evento
+        metrics['events_by_type'][event_type] = metrics['events_by_type'].get(event_type, 0) + 1
+        
+        # Actualizar métricas específicas según el tipo de evento
+        if event_type == 'schedule' and details:
+            # Distribución por prioridad
+            priority = details.get('priority')
+            if priority:
+                metrics['tasks_by_priority'][str(priority)] = metrics['tasks_by_priority'].get(str(priority), 0) + 1
+            
+            # Distribución por hora
+            if 'execution_time' in details:
+                try:
+                    hour = datetime.datetime.fromisoformat(details['execution_time']).hour
+                    metrics['hourly_distribution'][str(hour)] = metrics['hourly_distribution'].get(str(hour), 0) + 1
+                except (ValueError, TypeError):
+                    pass
+        
+        elif event_type == 'task_retry' and details:
+            # Distribución de reintentos
+            retry_count = details.get('retry_count', 0)
+            metrics['retry_distribution'][str(retry_count)] = metrics['retry_distribution'].get(str(retry_count), 0) + 1
+    
+    def get_schedule_metrics(self) -> Dict:
+        """
+        Obtiene métricas detalladas sobre la programación de tareas
+        
+        Returns:
+            Diccionario con métricas de programación
+        """
+        if 'schedule_metrics' not in self.performance_metrics:
+            return {
+                'events_by_type': {},
+                'tasks_by_priority': {},
+                'retry_distribution': {},
+                'hourly_distribution': {}
+            }
+        
+        return self.performance_metrics['schedule_metrics']

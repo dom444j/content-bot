@@ -780,6 +780,283 @@ class Notifier:
             
             logger.info(f"Webhook enviado a {url} correctamente")
     
+    def format_message(self, notification_type: str, message: str, data: Dict = None, 
+                      template_key: str = None, user_id: str = None) -> str:
+        """
+        Formatea un mensaje según el tipo de notificación y plantilla
+        
+        Args:
+            notification_type: Tipo de notificación (shadowban, trend, monetization, etc.)
+            message: Mensaje base a formatear
+            data: Datos adicionales para incluir en el mensaje
+            template_key: Clave de plantilla específica a utilizar (opcional)
+            user_id: ID de usuario para personalización (opcional)
+            
+        Returns:
+            Mensaje formateado según plantilla y tipo
+        """
+        # Cargar plantillas si no existen
+        if not hasattr(self, 'message_templates'):
+            self._load_message_templates()
+        
+        # Obtener plantilla según tipo y clave
+        template = None
+        
+        # Si se especifica una clave de plantilla, intentar usarla primero
+        if template_key and template_key in self.message_templates:
+            template = self.message_templates[template_key]
+        # Si no, buscar por tipo de notificación
+        elif notification_type in self.message_templates:
+            template = self.message_templates[notification_type]
+        # Si no hay plantilla específica, usar la plantilla por defecto
+        else:
+            template = self.message_templates.get('default', {
+                'format': '{message}\n\n{details}',
+                'detail_format': '- {key}: {value}'
+            })
+        
+        # Personalización por usuario
+        if user_id and user_id in self.user_configs:
+            user_template = self.user_configs[user_id].get('templates', {}).get(notification_type)
+            if user_template:
+                template = user_template
+        
+        # Formatear detalles
+        details = ""
+        if data and 'detail_format' in template:
+            detail_items = []
+            for key, value in data.items():
+                if isinstance(value, dict):
+                    # Formatear diccionarios anidados
+                    nested_details = []
+                    for k, v in value.items():
+                        nested_details.append(f"{k}: {v}")
+                    detail_items.append(template['detail_format'].format(
+                        key=key, value="{" + ", ".join(nested_details) + "}"
+                    ))
+                else:
+                    detail_items.append(template['detail_format'].format(key=key, value=value))
+            
+            details = "\n".join(detail_items)
+        
+        # Aplicar formato principal
+        formatted_message = template['format'].format(
+            message=message,
+            details=details,
+            **data if data else {}
+        )
+        
+        # Añadir emojis según tipo si están definidos
+        emoji = template.get('emoji', '')
+        if emoji:
+            formatted_message = f"{emoji} {formatted_message}"
+        
+        return formatted_message
+    
+    def _load_message_templates(self) -> None:
+        """Carga las plantillas de mensajes desde archivo o configuración"""
+        templates_file = os.path.join('config', 'notification_templates.json')
+        
+        # Plantillas por defecto
+        default_templates = {
+                'default': {
+                    'format': '{message}\n\n{details}',
+                    'detail_format': '- {key}: {value}',
+                    'emoji': '📢'
+                },
+            'shadowban': {
+                'format': '⚠️ ALERTA DE SHADOWBAN ⚠️\n\n{message}\n\nCanal: {channel}\nPlataforma: {platform}\n\nDetalles:\n{details}',
+                'detail_format': '- {key}: {value}',
+                'emoji': '🚫'
+            },
+            'trend': {
+                'format': '🔥 TENDENCIA DETECTADA 🔥\n\n{message}\n\nPuntuación: {score}/10\nCategoría: {category}\n\n{details}',
+                'detail_format': '- {key}: {value}',
+                'emoji': '📈'
+            },
+            'monetization': {
+                'format': '💰 ACTUALIZACIÓN DE MONETIZACIÓN 💰\n\n{message}\n\nCanal: {channel}\nIngresos: {revenue}\n\n{details}',
+                'detail_format': '- {key}: {value}',
+                'emoji': '💸'
+            },
+            'compliance': {
+                'format': '⚖️ ALERTA DE CUMPLIMIENTO ⚖️\n\n{message}\n\nContenido: {content_id}\nProblema: {issue}\n\n{details}',
+                'detail_format': '- {key}: {value}',
+                'emoji': '🔍'
+            },
+            'task': {
+                'format': '✅ TAREA {status} ✅\n\n{message}\n\nID: {task_id}\nTipo: {task_type}\n\n{details}',
+                'detail_format': '- {key}: {value}',
+                'emoji': '📋'
+            },
+            'system': {
+                'format': '🔧 SISTEMA: {message}\n\nComponente: {component}\nEstado: {status}\n\n{details}',
+                'detail_format': '- {key}: {value}',
+                'emoji': '⚙️'
+            }
+        }
+        
+        try:
+                if os.path.exists(templates_file):
+                    with open(templates_file, 'r', encoding='utf-8') as f:
+                        loaded_templates = json.load(f)
+                        # Combinar con plantillas por defecto
+                        self.message_templates = {**default_templates, **loaded_templates}
+                else:
+                    logger.warning(f"Archivo de plantillas no encontrado: {templates_file}")
+                    self.message_templates = default_templates
+            except Exception as e:
+                logger.error(f"Error al cargar plantillas: {str(e)}")
+                self.message_templates = default_templates
+    
+    def log_notification(self, notification: Dict, success: bool = True, 
+                        delivery_status: Dict = None, error: str = None) -> None:
+        """
+        Registra una notificación enviada en la base de conocimiento
+        
+        Args:
+            notification: Objeto de notificación
+            success: Si la notificación se envió correctamente
+            delivery_status: Estado de entrega por canal
+            error: Mensaje de error si falló
+        """
+        try:
+            # Crear entrada de log
+            log_entry = {
+                'notification_id': notification['id'],
+                'type': notification['type'],
+                'subject': notification['subject'],
+                'level': notification['level'],
+                'timestamp': notification['timestamp'],
+                'success': success,
+                'channels': notification.get('channels_sent', []),
+                'delivery_time': notification.get('delivery_time', 0),
+                'user_id': notification.get('user_id'),
+                'delivery_status': delivery_status or {},
+                'error': error,
+                'log_time': datetime.datetime.now().isoformat()
+            }
+            
+            # Guardar en base de conocimiento
+            try:
+                self.kb.save_notification_log(log_entry)
+                logger.debug(f"Notificación {notification['id']} registrada en base de conocimiento")
+            except Exception as e:
+                logger.warning(f"No se pudo guardar notificación en base de conocimiento: {str(e)}")
+                
+                # Fallback: guardar en archivo local
+                logs_dir = os.path.join('logs', 'notifications')
+                os.makedirs(logs_dir, exist_ok=True)
+                
+                log_file = os.path.join(logs_dir, f"notifications_{datetime.datetime.now().strftime('%Y%m%d')}.jsonl")
+                with open(log_file, 'a', encoding='utf-8') as f:
+                    f.write(json.dumps(log_entry) + '\n')
+            
+            # Actualizar métricas
+            self._update_notification_metrics(log_entry)
+            
+        except Exception as e:
+            logger.error(f"Error al registrar notificación: {str(e)}")
+    
+    def _update_notification_metrics(self, log_entry: Dict) -> None:
+        """
+        Actualiza métricas basadas en logs de notificaciones
+        
+        Args:
+            log_entry: Entrada de log de notificación
+        """
+        # Actualizar métricas por tipo
+        notification_type = log_entry['type']
+        if 'notifications_by_type' not in self.notification_metrics:
+            self.notification_metrics['notifications_by_type'] = defaultdict(int)
+        
+        self.notification_metrics['notifications_by_type'][notification_type] += 1
+        
+        # Actualizar métricas por nivel
+        level = log_entry['level']
+        if 'notifications_by_level' not in self.notification_metrics:
+            self.notification_metrics['notifications_by_level'] = defaultdict(int)
+        
+        self.notification_metrics['notifications_by_level'][level] += 1
+        
+        # Actualizar métricas de éxito/fallo
+        if log_entry['success']:
+            self.notification_metrics['success_count'] = self.notification_metrics.get('success_count', 0) + 1
+        else:
+            self.notification_metrics['failure_count'] = self.notification_metrics.get('failure_count', 0) + 1
+        
+        # Actualizar tiempo promedio de entrega
+        if log_entry['delivery_time'] > 0:
+            current_avg = self.notification_metrics.get('average_delivery_time', 0)
+            total_count = self.notification_metrics.get('success_count', 0)
+            
+            if total_count > 0:
+                new_avg = ((current_avg * (total_count - 1)) + log_entry['delivery_time']) / total_count
+                self.notification_metrics['average_delivery_time'] = new_avg
+    
+    def get_notification_history(self, filters: Dict = None, limit: int = 100) -> List[Dict]:
+        """
+        Obtiene el historial de notificaciones con filtros opcionales
+        
+        Args:
+            filters: Filtros a aplicar (tipo, nivel, éxito, etc.)
+            limit: Número máximo de resultados
+            
+        Returns:
+            Lista de notificaciones que cumplen los filtros
+        """
+        try:
+            # Intentar obtener de la base de conocimiento
+            try:
+                return self.kb.get_notification_logs(filters, limit)
+            except Exception as e:
+                logger.warning(f"No se pudo obtener historial de base de conocimiento: {str(e)}")
+            
+            # Fallback: leer de archivos locales
+            logs_dir = os.path.join('logs', 'notifications')
+            if not os.path.exists(logs_dir):
+                return []
+            
+            # Obtener archivos de log ordenados por fecha (más recientes primero)
+            log_files = sorted(
+                [f for f in os.listdir(logs_dir) if f.startswith('notifications_')],
+                reverse=True
+            )
+            
+            results = []
+            for log_file in log_files:
+                if len(results) >= limit:
+                    break
+                
+                file_path = os.path.join(logs_dir, log_file)
+                with open(file_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        try:
+                            entry = json.loads(line.strip())
+                            
+                            # Aplicar filtros
+                            if filters:
+                                match = True
+                                for key, value in filters.items():
+                                    if key not in entry or entry[key] != value:
+                                        match = False
+                                        break
+                                
+                                if not match:
+                                    continue
+                            
+                            results.append(entry)
+                            if len(results) >= limit:
+                                break
+                        except json.JSONDecodeError:
+                            continue
+            
+            return results
+            
+        except Exception as e:
+            logger.error(f"Error al obtener historial de notificaciones: {str(e)}")
+            return []
+
     def _send_console(self, notification: Dict, level_config: Dict):
         """Muestra notificación en consola"""
         prefix = level_config['prefix']
